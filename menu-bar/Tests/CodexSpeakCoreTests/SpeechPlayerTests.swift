@@ -6,12 +6,16 @@ final class SpeechPlayerTests: XCTestCase, @unchecked Sendable {
     func testSpeaksSegmentsInOrderUsingFreshStdinAndNoSpeechArguments() async {
         let launcher = SpeechLauncher(statuses: [0, 0, 0])
         let player = SpeechPlayer(launcher: launcher, clock: IncrementingClock(values: [1_000_000, 26_000_000]).now)
+        let canaries = ["SUCCESS_STDIN_CANARY_10391", "SUCCESS_STDIN_CANARY_21419", "SUCCESS_STDIN_CANARY_32717"]
 
-        let result = await player.play(event: event(["one", "two", "three"]))
+        let result = await player.play(event: event(canaries))
 
         XCTAssertEqual(result, PlaybackResult(outcome: .spoken, errorCode: nil, completedSegmentCount: 3, durationMilliseconds: 25))
-        XCTAssertEqual(launcher.stdinStrings, ["one", "two", "three"])
+        XCTAssertEqual(launcher.stdinStrings, canaries)
         XCTAssertEqual(launcher.requests.map(\.arguments), [[], [], []])
+        XCTAssertTrue(launcher.requests.allSatisfy { request in
+            canaries.allSatisfy { !request.arguments.joined().contains($0) }
+        })
         XCTAssertTrue(launcher.requests.allSatisfy { $0.executableURL.path == "/usr/bin/say" })
         XCTAssertEqual(Set(launcher.requests.map { ObjectIdentifier($0.standardInput) }).count, 3)
     }
@@ -20,12 +24,18 @@ final class SpeechPlayerTests: XCTestCase, @unchecked Sendable {
         let launcher = SpeechLauncher(statuses: [1, 0])
         let player = SpeechPlayer(launcher: launcher, clock: IncrementingClock(values: [0, 4_000_000]).now)
 
-        let result = await player.play(event: event(["PRIVATE ONE", "PRIVATE TWO"]))
+        let firstCanary = "FAILURE_STDIN_CANARY_43891"
+        let skippedCanary = "FAILURE_SKIPPED_CANARY_54293"
+        let result = await player.play(event: event([firstCanary, skippedCanary]))
 
         XCTAssertEqual(result, PlaybackResult(outcome: .failed, errorCode: .sayFailed, completedSegmentCount: 0, durationMilliseconds: 4))
-        XCTAssertEqual(launcher.stdinStrings, ["PRIVATE ONE"])
+        XCTAssertEqual(launcher.stdinStrings, [firstCanary])
+        XCTAssertEqual(launcher.requests[0].arguments, [])
+        XCTAssertFalse(launcher.requests[0].arguments.joined().contains(firstCanary))
+        XCTAssertFalse(launcher.requests[0].arguments.joined().contains(skippedCanary))
         XCTAssertEqual(Mirror(reflecting: result).children.count, 4)
-        XCTAssertFalse(String(reflecting: result).contains("PRIVATE"))
+        XCTAssertFalse(String(reflecting: result).contains(firstCanary))
+        XCTAssertFalse(String(reflecting: result).contains(skippedCanary))
     }
 
     func testLaunchFailureUsesFixedCodeAndDoesNotExposeRawError() async {
@@ -42,7 +52,9 @@ final class SpeechPlayerTests: XCTestCase, @unchecked Sendable {
         let process = BlockingSpeechProcess()
         let launcher = SpeechLauncher(processes: [process])
         let player = SpeechPlayer(launcher: launcher, clock: IncrementingClock(values: [0, 8_000_000]).now)
-        let task = Task { await player.play(event: self.event(["first", "never"])) }
+        let firstCanary = "CANCEL_STDIN_CANARY_19373"
+        let skippedCanary = "CANCEL_SKIPPED_CANARY_28411"
+        let task = Task { await player.play(event: self.event([firstCanary, skippedCanary])) }
         await launcher.waitForLaunchCount(1)
 
         await player.stopCurrent()
@@ -51,8 +63,11 @@ final class SpeechPlayerTests: XCTestCase, @unchecked Sendable {
 
         XCTAssertEqual(result, PlaybackResult(outcome: .cancelled, errorCode: nil, completedSegmentCount: 0, durationMilliseconds: 8))
         XCTAssertEqual(process.terminationCount, 1)
-        XCTAssertEqual(launcher.stdinStrings, ["first"])
+        XCTAssertEqual(launcher.stdinStrings, [firstCanary])
         XCTAssertEqual(launcher.requests.count, 1)
+        XCTAssertEqual(launcher.requests[0].arguments, [])
+        XCTAssertFalse(launcher.requests[0].arguments.joined().contains(firstCanary))
+        XCTAssertFalse(launcher.requests[0].arguments.joined().contains(skippedCanary))
     }
 
     func testIdleStopNeverSignalsCompletedStaleChild() async {

@@ -1,82 +1,120 @@
 # Codex Speak
 
-Codex Speak is a macOS Codex Plugin that speaks important turn
-outcomes with the system `say` command. It announces completed work, blocked
-work, and tasks that require user action. Ordinary answers remain silent.
+Codex Speak is a local macOS Codex Plugin that speaks turn outcomes with the
+system `say` command. It can announce concise outcome summaries or read the
+complete visible response, while a private menu bar helper provides playback
+controls without adding commands to the conversation.
 
 ## Requirements
 
-- macOS
+- macOS 13.0 or newer
 - Python 3.10 or newer available as `python3`
 - Codex with Plugin lifecycle-hook support
+- Xcode command-line tools with Swift 6 only when rebuilding the menu helper
 
-The plugin uses no network service, API key, third-party Python package,
-custom voice, or global Codex `notify` setting.
+Runtime operation uses the Python standard library and macOS frameworks. It
+needs no network service, API key, third-party Python package, custom voice,
+or global Codex `notify` setting.
 
-## Install from the personal Marketplace
+## Install and trust
 
-This development checkout uses `/Users/howard/plugins/codex-speak`
-as its local source and `/Users/howard/.agents/plugins/marketplace.json` as the
-default personal Marketplace.
+The personal Marketplace source is `/Users/howard/plugins/codex-speak`, with
+its entry in `/Users/howard/.agents/plugins/marketplace.json`:
 
 ```bash
 codex plugin add codex-speak@personal
 ```
 
-After installation, open `/hooks` in Codex, review the `SessionStart` and
-`Stop` commands, and trust the current hook definitions. Changed hook
-definitions require review again.
+Open `/hooks` after installation, review the bundled `SessionStart` and `Stop`
+commands, and trust the current definitions. Codex asks again when a hook
+definition changes. Start a new thread after installation or reinstall so the
+SessionStart protocol becomes active.
 
-Start a new thread after installation or reinstall so Codex loads the
-SessionStart protocol context.
+The embedded app is built and ad hoc signed locally. macOS may ask for local
+execution approval if the checkout or app was downloaded or quarantined;
+review its origin before approving it. Do not bypass Gatekeeper for an app you
+do not trust.
 
-## Behavior
+## Speech modes and outcomes
 
-- `completed`: speaks the result and the next recommended step.
-- `blocked`: speaks the blocker and the next required step.
-- `action_required`: speaks the action or decision needed from the user.
-- `silent`: does not speak ordinary answers, routine clarification, casual
-  conversation, progress updates, or optional follow-up invitations.
+The menu bar checkmark selects one speech mode:
 
-Important announcements track the active primary instruction in the
-conversation. Internal commands, temporary files, tests, test fixtures,
-validation artifacts, and tool mechanics stay unspoken process details unless
-the user explicitly requested them. Each announcement states the requested
-outcome first and then the real next step, or that no follow-up is needed.
+- `Summary` speaks only important `completed`, `blocked`, or
+  `action_required` outcome text. Ordinary `silent` answers remain quiet.
+- `Full` reads the normalized visible response. Markdown formatting, code,
+  URLs, and local paths are replaced with speech-safe descriptions.
 
-Language, salutation, and tone come from the active Codex context, including
-applicable `AGENTS.md`, memory, and conversation preferences. The plugin does not hard-code a user's name.
+Important announcements follow the active primary instruction. Internal
+commands, temporary files, tests, test fixtures, validation artifacts, and
+tool mechanics remain unspoken unless explicitly requested. Language,
+salutation, and tone come from active context such as `AGENTS.md`, memory, and
+conversation preferences; the plugin does not hard-code a user's name.
 
-The first release uses the current macOS default voice and rate. Disable the
-plugin when speech is not wanted.
+The default macOS voice and rate are used. `Plugin Toggle` in Codex controls the whole plugin,
+including both hooks and speech; it is not a mode selector.
+Use `Summary` or `Full` in the menu to change only the speech mode.
 
-## Privacy
+## Menu controls
 
-The final assistant response and user input are not written to plugin
-diagnostics. Speech text exists temporarily in a private `0600` queue file
-under `PLUGIN_DATA`, is removed before `/usr/bin/say` starts, and is discarded
-rather than spoken when older than five minutes or when the worker cannot
-start. The worker feeds speech through standard input, so it does not appear
-in the `say` process arguments.
+The helper has exactly five menu actions:
 
-Diagnostics contain only timestamps, hashed event identifiers, status,
-outcome, duration, and fixed error codes. No component performs network
-access.
+1. `Summary`
+2. `Full`
+3. `Stop Current Speech`
+4. `Clear Pending Speeches`
+5. `Quit Codex Speak`
 
-## Test
+These are context-free local controls: they act on playback and settings
+without submitting a prompt, mutating the current conversation, or requiring
+an active thread. Quit stops the helper UI; a later hook can start it again
+while the plugin remains enabled.
 
-The plugin and its automated tests use only the Python standard library:
+## Privacy and fallback
+
+The final assistant response and user input are never copied into plugin
+diagnostics. Speech exists temporarily in a private `0600` queue under
+`PLUGIN_DATA`, is claimed and removed before playback, and is discarded when
+older than five minutes. Speech reaches `/usr/bin/say` only through standard
+input, never process arguments.
+
+Diagnostics contain only timestamps, hashed event identifiers, allowlisted
+status/outcome values, counts, duration, and fixed error codes. The menu
+helper-state contains only version, PID, boot identity, and monotonic heartbeat.
+No component performs network access. Automated privacy canaries cover prompt,
+body, summary, code, URL, path, segmented speech, success, failure, and cancel
+paths; fake runners ensure tests never produce sound.
+
+The hook passes its active Python executable to the menu helper. If the
+embedded helper is absent, cannot be verified, or cannot start, the plugin
+uses a detached Python fallback worker to drain queued speech safely. The
+fallback preserves speech and diagnostics privacy but has no menu bar UI;
+rebuild or reinstall the helper to restore interactive controls.
+
+## Migrate from the legacy plugin
+
+Disable or uninstall `codex-voice-notifier` before enabling Codex Speak so two
+plugins do not announce the same turn. Install `codex-speak@personal`, trust
+its current hooks in `/hooks`, and start a new thread. Old runtime data is not
+imported; mode and queue state begin cleanly under the Codex Speak plugin data
+directory.
+
+## Test and validate
+
+From the development checkout:
 
 ```bash
 cd /Users/howard/plugins/codex-speak
-python3 -m unittest discover -s tests -v
+PYTHONPYCACHEPREFIX=/private/tmp/codex-speak-pycache \
+  python3 -m unittest discover -s tests -v
+PYTHONPYCACHEPREFIX=/private/tmp/codex-speak-pycache \
+  python3 -m compileall -q hooks codex_speak tests
+python3 -m json.tool hooks/hooks.json
+swift test --package-path menu-bar -Xswiftc -warnings-as-errors
 ```
 
-Automated tests use fake speech runners and do not make sound.
-
-The official plugin validator is a maintainer/development check, not a plugin
-runtime dependency. The validator itself imports PyYAML. Run it reproducibly
-in a disposable virtual environment outside the repository:
+The official validator is a maintainer/development check, not a runtime
+dependency. It imports PyYAML, so create a disposable environment when the
+workspace validator environment is unavailable:
 
 ```bash
 python3 -m venv /private/tmp/codex-plugin-validator
@@ -86,10 +124,33 @@ python3 -m venv /private/tmp/codex-plugin-validator
   /Users/howard/plugins/codex-speak
 ```
 
+## Build the universal menu helper
+
+The build performs separate release builds, combines exact `arm64` and
+`x86_64` slices, assembles the app, and verifies its local ad hoc signature.
+It downloads nothing and writes only `.build`, `assets`, and a temporary
+staging directory:
+
+```bash
+./scripts/build_menu_app.sh
+lipo -archs assets/CodexSpeakMenu.app/Contents/MacOS/CodexSpeakMenu
+codesign --verify --deep --strict assets/CodexSpeakMenu.app
+```
+
+Commit the rebuilt `assets/CodexSpeakMenu.app` with source changes so local
+installs receive the matching helper.
+
+The bundled ad hoc signature is appropriate for local builds, not signed sharing
+with other Macs. For distribution, replace it with a Developer ID
+Application signature using the hardened runtime and timestamp, archive the
+app without altering its contents, submit it to Apple for notarization, staple
+the ticket, and verify both Gatekeeper and `codesign` before sharing. Never
+describe an ad hoc build as notarized or Developer ID signed.
+
 ## Update a local installation
 
-After changing the plugin, refresh its cachebuster and reinstall it from the
-existing personal Marketplace entry:
+After source or embedded-app changes, refresh the immutable Marketplace
+cachebuster with the supported helper and reinstall:
 
 ```bash
 python3 /Users/howard/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py \
@@ -98,15 +159,22 @@ python3 /Users/howard/.codex/skills/.system/plugin-creator/scripts/read_marketpl
 codex plugin add codex-speak@personal
 ```
 
-Then review changed hooks with `/hooks` and test in a new thread.
+Review changed definitions in `/hooks` and start a new thread afterward.
 
 ## Troubleshooting
 
-- No speech: confirm the plugin is enabled, open `/hooks`, and trust both
-  bundled hooks.
+- No speech: confirm `Plugin Toggle` is enabled, then review and trust both
+  bundled hooks in `/hooks`.
 - No speech in an existing thread: start a new thread so SessionStart injects
   the protocol.
-- Still silent: verify `python3 --version` is 3.10 or newer and
-  `/usr/bin/say` exists.
-- Ordinary answers are silent by design.
-- Concurrent announcements wait in a local FIFO queue and play one at a time.
+- Menu missing but speech works: the Python fallback is active; rebuild the
+  embedded app and reinstall after updating the cachebuster.
+- Menu opens but actions fail: verify `python3` is still executable and the
+  helper was launched by a current trusted hook so active-Python propagation
+  is intact.
+- App rejected by macOS: verify its source and signature. Rebuild locally or
+  use a properly Developer ID signed and notarized copy.
+- Ordinary answers are silent in Summary mode by design; select Full if the
+  visible response should be read.
+- Concurrent announcements are FIFO and play one at a time; use Clear Pending
+  Speeches to discard the queue or Stop Current Speech to cancel playback.

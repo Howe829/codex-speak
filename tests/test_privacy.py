@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -6,12 +7,199 @@ import time
 import unittest
 
 from hooks.stop import handle_event
+from codex_speak.bridge import run_bridge
 from codex_speak.protocol import Announcement
 from codex_speak.queue import enqueue
+from codex_speak.render import normalize_full_text, segment_text
 from codex_speak.worker import run_worker
 
 
 class PrivacyAndPackagingTests(unittest.TestCase):
+    def test_full_mode_bridge_claims_then_drains_private_runtime(self) -> None:
+        canaries = {
+            "prompt": "BRIDGE_PROMPT_CANARY_10457",
+            "body": "BRIDGE_BODY_CANARY_21929",
+            "summary": "BRIDGE_SUMMARY_CANARY_32771",
+            "code": "BRIDGE_CODE_CANARY_43391",
+            "url": "BRIDGE_URL_CANARY_54121",
+            "path": "BRIDGE_PATH_CANARY_65809",
+            "segment": "BRIDGE_SEGMENT_CANARY_76157",
+        }
+        visible_body = (
+            f"{canaries['body']} `{canaries['code']}` "
+            f"https://example.invalid/{canaries['url']} "
+            f"/private/tmp/{canaries['path']} {canaries['segment']}"
+        )
+        expected_segments = segment_text(normalize_full_text(visible_body))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_dir = root / "data"
+            data_dir.mkdir(mode=0o700)
+            state_path = data_dir / "helper-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "pid": 123,
+                        "boot_id": "11111111-1111-1111-1111-111111111111",
+                        "monotonic": 10.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state_path.chmod(0o600)
+            output = io.StringIO()
+
+            def run_helper_bridge(plugin_root: Path, plugin_data: Path) -> None:
+                self.assertEqual((plugin_root, plugin_data), (root, data_dir))
+                run_bridge(
+                    plugin_data,
+                    output=output,
+                    sleep=lambda _: None,
+                    clock=lambda: time.monotonic() + 2.0,
+                    stop_requested=lambda: len(output.getvalue().splitlines()) >= 2,
+                )
+
+            marker = json.dumps(
+                {"status": "completed", "speech_text": canaries["summary"]},
+                separators=(",", ":"),
+            )
+            self.assertTrue(
+                handle_event(
+                    {
+                        "session_id": "bridge-private-session",
+                        "turn_id": "bridge-private-turn",
+                        "last_assistant_message": (
+                            f"{visible_body}\n<!-- codex-speak:v1 {marker} -->"
+                        ),
+                        "user_input": canaries["prompt"],
+                    },
+                    plugin_root=root,
+                    data_dir=data_dir,
+                    platform_name="darwin",
+                    mode_loader=lambda _: "full",
+                    start_consumer=run_helper_bridge,
+                )
+            )
+            bridge_messages = [
+                json.loads(line) for line in output.getvalue().splitlines()
+            ]
+            self.assertEqual(bridge_messages[0], {"type": "ready"})
+            self.assertEqual(bridge_messages[1]["segments"], list(expected_segments))
+            self.assertEqual(list((data_dir / "spool").glob("*.json")), [])
+
+            output.seek(0)
+            output.truncate()
+            del bridge_messages
+            for path in data_dir.rglob("*"):
+                if path.is_file():
+                    contents = path.read_bytes()
+                    for canary in canaries.values():
+                        self.assertNotIn(canary.encode(), contents, path)
+
+    def test_full_mode_fallback_leaves_canaries_only_in_fake_say_stdin(self) -> None:
+        for outcome, return_code in (("success", 0), ("failure", 9)):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                suffix = outcome.upper()
+                canaries = {
+                    "prompt": f"PROMPT_CANARY_10931_{suffix}",
+                    "body": f"BODY_CANARY_21403_{suffix}",
+                    "summary": f"SUMMARY_CANARY_32719_{suffix}",
+                    "code": f"CODE_CANARY_43801_{suffix}",
+                    "url": f"URL_CANARY_54319_{suffix}",
+                    "path": f"PATH_CANARY_65927_{suffix}",
+                    "segment_one": f"SEGMENT_CANARY_76111_{suffix}",
+                    "segment_two": f"SEGMENT_CANARY_87383_{suffix}",
+                }
+                visible_body = (
+                    f"{canaries['body']} `{canaries['code']}` "
+                    f"https://example.invalid/{canaries['url']} "
+                    f"/private/tmp/{canaries['path']} "
+                    f"{canaries['segment_one']} "
+                    + ("first filler " * 70)
+                    + f"{canaries['segment_two']} "
+                    + ("second filler " * 70)
+                )
+                normalized = normalize_full_text(visible_body)
+                expected_segments = segment_text(normalized)
+                self.assertGreaterEqual(len(expected_segments), 2)
+                self.assertIn("代码", normalized)
+                self.assertIn("链接", normalized)
+                self.assertIn("相关文件", normalized)
+                for key in ("code", "url", "path", "prompt", "summary"):
+                    self.assertNotIn(canaries[key], normalized)
+
+                root = Path(temporary)
+                data_dir = root / "data"
+                say_path = root / "fake-say"
+                say_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                say_path.chmod(0o700)
+                fake_stdin: list[str] = []
+                process_arguments: list[list[str]] = []
+
+                def fake_run(arguments, **kwargs):
+                    process_arguments.append(arguments)
+                    fake_stdin.append(kwargs["input"])
+                    return subprocess.CompletedProcess(arguments, return_code)
+
+                def run_fallback(plugin_root: Path, plugin_data: Path) -> None:
+                    self.assertEqual((plugin_root, plugin_data), (root, data_dir))
+                    run_worker(
+                        plugin_data,
+                        say_path=say_path,
+                        run_command=fake_run,
+                        sleep=lambda _: None,
+                        clock=lambda: time.monotonic() + 2.0,
+                        monotonic=lambda: 10.0,
+                    )
+
+                marker = json.dumps(
+                    {
+                        "status": "completed",
+                        "speech_text": canaries["summary"],
+                    },
+                    separators=(",", ":"),
+                )
+                self.assertTrue(
+                    handle_event(
+                        {
+                            "session_id": "private-session",
+                            "turn_id": f"private-{outcome}",
+                            "last_assistant_message": (
+                                f"{visible_body}\n<!-- codex-speak:v1 {marker} -->"
+                            ),
+                            "user_input": canaries["prompt"],
+                        },
+                        plugin_root=root,
+                        data_dir=data_dir,
+                        platform_name="darwin",
+                        mode_loader=lambda _: "full",
+                        start_consumer=run_fallback,
+                    )
+                )
+
+                expected_stdin = (
+                    list(expected_segments)
+                    if return_code == 0
+                    else [expected_segments[0]]
+                )
+                self.assertEqual(fake_stdin, expected_stdin)
+                self.assertEqual(
+                    process_arguments,
+                    [[str(say_path)]] * len(expected_stdin),
+                )
+                serialized_arguments = json.dumps(process_arguments)
+                for canary in canaries.values():
+                    self.assertNotIn(canary, serialized_arguments)
+                self.assertFalse((data_dir / "helper-state.json").exists())
+                self.assertEqual(list((data_dir / "spool").glob("*.json")), [])
+                for path in data_dir.rglob("*"):
+                    if path.is_file():
+                        contents = path.read_bytes()
+                        for canary in canaries.values():
+                            self.assertNotIn(canary.encode(), contents, path)
+
     def test_valid_stop_event_never_persists_assistant_user_or_claimed_speech(
         self,
     ) -> None:
@@ -173,6 +361,19 @@ class PrivacyAndPackagingTests(unittest.TestCase):
             "python3 -m venv /private/tmp/codex-plugin-validator",
             "/private/tmp/codex-plugin-validator/bin/python -m pip install PyYAML",
             "/private/tmp/codex-plugin-validator/bin/python",
+            "Summary",
+            "Full",
+            "Stop Current Speech",
+            "Clear Pending Speeches",
+            "Quit Codex Speak",
+            "Plugin Toggle",
+            "controls the whole plugin",
+            "context-free",
+            "fallback",
+            "codex-voice-notifier",
+            "./scripts/build_menu_app.sh",
+            "ad hoc",
+            "signed sharing",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, readme)
