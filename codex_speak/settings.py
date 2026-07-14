@@ -12,6 +12,12 @@ _VERSION: Final[int] = 1
 _MODES: Final[frozenset[str]] = frozenset({"summary", "full"})
 
 
+class _ExactArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+
 def _is_settings(value: object) -> bool:
     return (
         isinstance(value, dict)
@@ -70,15 +76,20 @@ def load_mode(data_dir: Path) -> str:
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         value = None
     if _is_settings(value):
+        os.chmod(data_dir, 0o700)
         os.chmod(path, 0o600)
         return value["mode"]
     return save_mode(data_dir, "summary")
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python3 -m codex_speak.settings")
+    parser = _ExactArgumentParser(prog="python3 -m codex_speak.settings")
     parser.add_argument("--data-dir", type=Path, required=True)
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=_ExactArgumentParser,
+    )
     subparsers.add_parser("get")
     set_parser = subparsers.add_parser("set")
     set_parser.add_argument("mode", choices=sorted(_MODES))

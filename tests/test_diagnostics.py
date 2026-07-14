@@ -205,6 +205,81 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(payload["error_code"], None)
             self.assertEqual(payload["segment_count"], 1)
 
+    def test_cli_rejects_abbreviated_root_and_record_options(self) -> None:
+        abbreviated_arguments = (
+            ("--data-d", "root"),
+            ("--event-i", "record"),
+        )
+        for abbreviation, location in abbreviated_arguments:
+            with self.subTest(abbreviation=abbreviation):
+                with tempfile.TemporaryDirectory() as temporary:
+                    data_dir = Path(temporary)
+                    arguments = self._valid_cli_arguments()
+                    if location == "root":
+                        completed = self._run_raw_cli(
+                            abbreviation,
+                            str(data_dir),
+                            *arguments,
+                        )
+                    else:
+                        arguments[arguments.index("--event-id")] = abbreviation
+                        completed = self._run_raw_cli(
+                            "--data-dir",
+                            str(data_dir),
+                            *arguments,
+                        )
+
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertFalse(
+                        (data_dir / "diagnostics.jsonl").exists()
+                    )
+
+    def test_cli_rejects_repeated_metadata_options(self) -> None:
+        repeated_values = {
+            "--event-id": "b" * 24,
+            "--status": "blocked",
+            "--result": "failed",
+            "--mode": "full",
+            "--segment-count": "2",
+            "--duration-ms": "26",
+            "--error-code": "say_failed",
+        }
+        for option, repeated_value in repeated_values.items():
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory() as temporary:
+                    data_dir = Path(temporary)
+                    completed = self._run_cli(
+                        data_dir,
+                        *self._valid_cli_arguments(),
+                        option,
+                        repeated_value,
+                    )
+
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertFalse(
+                        (data_dir / "diagnostics.jsonl").exists()
+                    )
+
+    def test_cli_rejects_repeated_data_dir_option(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first_data_dir = Path(temporary) / "first"
+            second_data_dir = Path(temporary) / "second"
+            completed = self._run_raw_cli(
+                "--data-dir",
+                str(first_data_dir),
+                "--data-dir",
+                str(second_data_dir),
+                *self._valid_cli_arguments(),
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(
+                (first_data_dir / "diagnostics.jsonl").exists()
+            )
+            self.assertFalse(
+                (second_data_dir / "diagnostics.jsonl").exists()
+            )
+
     def test_cli_rejects_sensitive_values_without_echoing_them(self) -> None:
         sensitive_values = (
             "secret speech content",
@@ -247,6 +322,34 @@ class DiagnosticsTests(unittest.TestCase):
         data_dir: Path,
         *arguments: str,
     ) -> subprocess.CompletedProcess[str]:
+        return DiagnosticsTests._run_raw_cli(
+            "--data-dir",
+            str(data_dir),
+            *arguments,
+        )
+
+    @staticmethod
+    def _valid_cli_arguments() -> list[str]:
+        return [
+            "record",
+            "--event-id",
+            "a" * 24,
+            "--status",
+            "completed",
+            "--mode",
+            "summary",
+            "--result",
+            "spoken",
+            "--segment-count",
+            "1",
+            "--duration-ms",
+            "25",
+            "--error-code",
+            "NONE",
+        ]
+
+    @staticmethod
+    def _run_raw_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(Path(__file__).parents[1])
         return subprocess.run(
@@ -254,8 +357,6 @@ class DiagnosticsTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "codex_speak.diagnostics",
-                "--data-dir",
-                str(data_dir),
                 *arguments,
             ],
             capture_output=True,
@@ -293,6 +394,23 @@ class DiagnosticsTests(unittest.TestCase):
                         result="spoken",
                         now=now,
                     )
+
+    def test_rejects_datetime_subclasses_with_hostile_isoformat(self) -> None:
+        class HostileDatetime(datetime):
+            def isoformat(self, *args, **kwargs):
+                return "/Users/private/secret.wav"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            record(
+                data_dir,
+                event_id="a" * 24,
+                status="completed",
+                result="spoken",
+                now=HostileDatetime(2026, 7, 14, tzinfo=timezone.utc),
+            )
+
+            self.assertFalse((data_dir / "diagnostics.jsonl").exists())
 
     def test_prewrite_threshold_keeps_active_file_at_or_below_256_kib(self) -> None:
         now = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)

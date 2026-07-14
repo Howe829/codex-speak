@@ -104,7 +104,7 @@ def record(
 ) -> None:
     if not isinstance(data_dir, Path):
         return
-    if now is not None and not isinstance(now, datetime):
+    if now is not None and type(now) is not datetime:
         return
     if not _metadata_is_valid(
         event_id,
@@ -161,26 +161,55 @@ class _CliError(Exception):
 
 
 class _StrictArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
     def error(self, message: str) -> None:
         raise _CliError from None
 
 
+class _UniqueStoreAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            raise _CliError from None
+        setattr(namespace, self.dest, values)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _StrictArgumentParser(prog="python3 -m codex_speak.diagnostics")
-    parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--data-dir", required=True, action=_UniqueStoreAction)
     subparsers = parser.add_subparsers(
         dest="command",
         required=True,
         parser_class=_StrictArgumentParser,
     )
     record_parser = subparsers.add_parser("record")
-    record_parser.add_argument("--event-id", required=True)
-    record_parser.add_argument("--status", required=True)
-    record_parser.add_argument("--result", required=True)
-    record_parser.add_argument("--mode", required=True)
-    record_parser.add_argument("--segment-count", required=True)
-    record_parser.add_argument("--duration-ms", required=True)
-    record_parser.add_argument("--error-code", required=True)
+    record_parser.add_argument(
+        "--event-id", required=True, action=_UniqueStoreAction
+    )
+    record_parser.add_argument(
+        "--status", required=True, action=_UniqueStoreAction
+    )
+    record_parser.add_argument(
+        "--result", required=True, action=_UniqueStoreAction
+    )
+    record_parser.add_argument("--mode", required=True, action=_UniqueStoreAction)
+    record_parser.add_argument(
+        "--segment-count", required=True, action=_UniqueStoreAction
+    )
+    record_parser.add_argument(
+        "--duration-ms", required=True, action=_UniqueStoreAction
+    )
+    record_parser.add_argument(
+        "--error-code", required=True, action=_UniqueStoreAction
+    )
     return parser
 
 

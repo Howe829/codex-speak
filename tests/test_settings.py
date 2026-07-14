@@ -63,6 +63,19 @@ class SettingsTests(unittest.TestCase):
             )
             self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
 
+    def test_load_valid_settings_normalizes_existing_permissions(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "settings.json"
+            path.write_text('{"version":1,"mode":"full"}', encoding="utf-8")
+            root.chmod(0o755)
+            path.chmod(0o644)
+
+            self.assertEqual(load_mode(root), "full")
+
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_cli_get_and_set_print_only_mode(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -81,8 +94,24 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(get_full.stdout, "full\n")
             self.assertEqual(get_full.stderr, "")
 
+    def test_cli_rejects_abbreviated_options(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = self._run_raw_cli("--data-d", str(root), "get")
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "settings.json").exists())
+
     @staticmethod
     def _run_cli(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return SettingsTests._run_raw_cli(
+            "--data-dir",
+            str(root),
+            *arguments,
+        )
+
+    @staticmethod
+    def _run_raw_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(Path(__file__).parents[1])
         return subprocess.run(
@@ -90,8 +119,6 @@ class SettingsTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "codex_speak.settings",
-                "--data-dir",
-                str(root),
                 *arguments,
             ],
             capture_output=True,
