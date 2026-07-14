@@ -40,7 +40,10 @@ final class HeartbeatTests: XCTestCase {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: stateURL.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["helper-state.json"])
+        XCTAssertEqual(
+            Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)),
+            [".helper-state.lock", "helper-state.json"]
+        )
     }
 
     func testRejectsStaleFutureAndOtherBootHeartbeat() throws {
@@ -111,6 +114,96 @@ final class HeartbeatTests: XCTestCase {
         heartbeat.remove()
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path))
+    }
+
+    func testFreshOtherOwnerCannotBeOverwrittenAndCanBeTakenAfterRemoval() throws {
+        let stateURL = temporaryDirectory().appendingPathComponent("helper-state.json")
+        let oldHeartbeat = try Heartbeat(
+            stateURL: stateURL,
+            processID: 4321,
+            bootID: bootID,
+            identity: identity,
+            monotonic: { 100 }
+        )
+        let replacementIdentity = String(repeating: "b", count: 64)
+        let newHeartbeat = try Heartbeat(
+            stateURL: stateURL,
+            processID: 9876,
+            bootID: bootID,
+            identity: replacementIdentity,
+            monotonic: { 101 }
+        )
+        try oldHeartbeat.write()
+
+        XCTAssertThrowsError(try newHeartbeat.write()) { error in
+            XCTAssertEqual(error as? HeartbeatError, .ownershipConflict)
+        }
+        XCTAssertEqual(
+            readCurrentHeartbeat(
+                stateURL: stateURL,
+                currentBootID: bootID,
+                expectedIdentity: identity,
+                now: 101
+            ),
+            4321
+        )
+
+        oldHeartbeat.remove()
+        try newHeartbeat.write()
+
+        XCTAssertEqual(
+            readCurrentHeartbeat(
+                stateURL: stateURL,
+                currentBootID: bootID,
+                expectedIdentity: replacementIdentity,
+                now: 101
+            ),
+            9876
+        )
+    }
+
+    func testRemoveWaitsForStateLockThenPreservesReplacement() throws {
+        let stateURL = temporaryDirectory().appendingPathComponent("helper-state.json")
+        let heartbeat = try Heartbeat(
+            stateURL: stateURL,
+            processID: 4321,
+            bootID: bootID,
+            identity: identity,
+            monotonic: { 100 }
+        )
+        try heartbeat.write()
+        let started = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let replacementIdentity = String(repeating: "b", count: 64)
+
+        try withHelperStateLock(stateURL: stateURL) {
+            DispatchQueue.global().async {
+                started.signal()
+                heartbeat.remove()
+                finished.signal()
+            }
+            XCTAssertEqual(started.wait(timeout: .now() + 1), .success)
+            XCTAssertEqual(finished.wait(timeout: .now() + 0.1), .timedOut)
+            let replacement = try JSONSerialization.data(withJSONObject: [
+                "version": 2,
+                "pid": 9876,
+                "boot_id": bootID,
+                "monotonic": 101.0,
+                "identity": replacementIdentity,
+            ])
+            try replacement.write(to: stateURL, options: .atomic)
+        }
+
+        XCTAssertEqual(finished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(
+            readCurrentHeartbeat(
+                stateURL: stateURL,
+                currentBootID: bootID,
+                expectedIdentity: replacementIdentity,
+                now: 101
+            ),
+            9876
+        )
     }
 
     private func temporaryDirectory() -> URL {

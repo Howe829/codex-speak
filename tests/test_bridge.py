@@ -1,9 +1,11 @@
 import io
 import json
 from pathlib import Path
+import signal
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -175,13 +177,25 @@ class BridgeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            self.assertIsNone(
+                helper._read_current_state(
+                    state_path,
+                    current_boot_id=CLOCK,
+                    now=101.0,
+                    expected_identity="0" * 64,
+                )
+            )
 
             class Process:
                 pid = 444
 
             launches = []
+            kill_calls = []
 
             def sleep(_seconds):
+                if not launches:
+                    state_path.unlink(missing_ok=True)
+                    return
                 state_path.write_text(
                     json.dumps(
                         {
@@ -195,18 +209,23 @@ class BridgeTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            helper.launch_verified_helper(
-                Path("/helper"),
-                root,
-                data_dir,
-                monotonic=lambda: 100.0,
-                boot_id_loader=lambda: CLOCK,
-                popen=lambda arguments, **_kwargs: (
-                    launches.append(arguments) or Process()
-                ),
-                sleep=sleep,
-            )
+            def kill(pid, requested_signal):
+                kill_calls.append((pid, requested_signal))
+
+            with patch("codex_speak.helper.os.kill", side_effect=kill):
+                helper.launch_verified_helper(
+                    Path("/helper"),
+                    root,
+                    data_dir,
+                    monotonic=lambda: 100.0,
+                    boot_id_loader=lambda: CLOCK,
+                    popen=lambda arguments, **_kwargs: (
+                        launches.append(arguments) or Process()
+                    ),
+                    sleep=sleep,
+                )
             identity = helper._helper_identity(root)
+            self.assertEqual(kill_calls, [(321, signal.SIGTERM), (321, 0)])
             self.assertEqual(len(identity), 64)
             self.assertNotIn(str(root), identity)
             self.assertEqual(
@@ -247,6 +266,66 @@ class BridgeTests(unittest.TestCase):
                     expected_identity="0" * 64,
                 )
             )
+
+    def test_concurrent_launchers_spawn_only_one_helper(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "plugin"
+            root.mkdir()
+            data_dir = Path(temporary) / "data"
+            executable = Path("/helper")
+            rendezvous = threading.Barrier(2)
+            launches = []
+            failures = []
+
+            class Process:
+                pid = 444
+
+            def popen(arguments, **_kwargs):
+                launches.append(arguments)
+                try:
+                    rendezvous.wait(timeout=0.2)
+                except threading.BrokenBarrierError:
+                    pass
+                identity = helper._helper_identity(root)
+                state_path = data_dir / "helper-state.json"
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "version": 2,
+                            "pid": 444,
+                            "boot_id": CLOCK,
+                            "monotonic": 100.0,
+                            "identity": identity,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return Process()
+
+            def launch():
+                try:
+                    helper.launch_verified_helper(
+                        executable,
+                        root,
+                        data_dir,
+                        monotonic=lambda: 100.0,
+                        boot_id_loader=lambda: CLOCK,
+                        popen=popen,
+                        sleep=lambda _: None,
+                    )
+                except BaseException as error:
+                    failures.append(error)
+
+            threads = [threading.Thread(target=launch) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(failures, [])
+            self.assertEqual(len(launches), 1)
 
     def test_stale_or_invalid_heartbeat_is_removed_without_signaling_pid(self) -> None:
         helper = self._helper()

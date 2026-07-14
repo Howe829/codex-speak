@@ -9,6 +9,30 @@ public enum HeartbeatError: Error, Equatable {
     case invalidProcessID
     case cannotCreateDirectory
     case cannotWrite
+    case ownershipConflict
+}
+
+public func withHelperStateLock<Result>(
+    stateURL: URL,
+    _ body: () throws -> Result
+) throws -> Result {
+    let lockURL = stateURL.deletingLastPathComponent()
+        .appendingPathComponent(".helper-state.lock")
+    let descriptor = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR)
+    guard descriptor >= 0 else { throw HeartbeatError.cannotWrite }
+    guard fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
+        close(descriptor)
+        throw HeartbeatError.cannotWrite
+    }
+    guard flock(descriptor, LOCK_EX) == 0 else {
+        close(descriptor)
+        throw HeartbeatError.cannotWrite
+    }
+    defer {
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+    }
+    return try body()
 }
 
 public final class Heartbeat: @unchecked Sendable {
@@ -81,33 +105,41 @@ public final class Heartbeat: @unchecked Sendable {
             throw HeartbeatError.cannotWrite
         }
 
-        let temporaryURL = directory.appendingPathComponent(".helper-state.\(UUID().uuidString).tmp")
-        let descriptor = open(temporaryURL.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw HeartbeatError.cannotWrite }
-        do {
-            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-            try handle.write(contentsOf: data)
-            try handle.synchronize()
-            try handle.close()
-            guard rename(temporaryURL.path, stateURL.path) == 0 else {
+        try withHelperStateLock(stateURL: stateURL) {
+            if let owner = readFreshHeartbeatUnlocked(
+                stateURL: stateURL,
+                currentBootID: bootID,
+                now: timestamp
+            ), owner.processID != Int(processID) || owner.identity != identity {
+                throw HeartbeatError.ownershipConflict
+            }
+            let temporaryURL = directory.appendingPathComponent(".helper-state.\(UUID().uuidString).tmp")
+            let descriptor = open(temporaryURL.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+            guard descriptor >= 0 else { throw HeartbeatError.cannotWrite }
+            do {
+                let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+                try handle.write(contentsOf: data)
+                try handle.synchronize()
+                try handle.close()
+                guard rename(temporaryURL.path, stateURL.path) == 0 else {
+                    throw HeartbeatError.cannotWrite
+                }
+            } catch {
+                unlink(temporaryURL.path)
                 throw HeartbeatError.cannotWrite
             }
-        } catch {
-            unlink(temporaryURL.path)
-            throw HeartbeatError.cannotWrite
         }
     }
 
     public func remove() {
-        guard let data = try? Data(contentsOf: stateURL),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any],
-              jsonInteger(dictionary["version"]) == 2,
-              jsonInteger(dictionary["pid"]) == Int(processID),
-              dictionary["identity"] as? String == identity else {
-            return
+        try? withHelperStateLock(stateURL: stateURL) {
+            guard let owner = readStoredOwnerUnlocked(stateURL: stateURL),
+                  owner.processID == Int(processID),
+                  owner.identity == identity else {
+                return
+            }
+            try? FileManager.default.removeItem(at: stateURL)
         }
-        try? FileManager.default.removeItem(at: stateURL)
     }
 }
 
@@ -151,24 +183,68 @@ public func readCurrentHeartbeat(
     expectedProcessID: Int? = nil
 ) -> Int? {
     guard let normalizedBootID = normalizeBootID(currentBootID), now.isFinite,
+          normalizeHelperIdentity(expectedIdentity) != nil else {
+        return nil
+    }
+    let owner = try? withHelperStateLock(stateURL: stateURL) {
+        readFreshHeartbeatUnlocked(
+            stateURL: stateURL,
+            currentBootID: normalizedBootID,
+            now: now
+        )
+    }
+    guard let owner,
+          owner.identity == expectedIdentity,
+          expectedProcessID == nil || expectedProcessID == owner.processID else {
+        return nil
+    }
+    return owner.processID
+}
+
+private struct StoredOwner {
+    let processID: Int
+    let bootID: String
+    let monotonic: Double
+    let identity: String
+}
+
+private func readStoredOwnerUnlocked(stateURL: URL) -> StoredOwner? {
+    guard
           let data = try? Data(contentsOf: stateURL),
           let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any],
           Set(dictionary.keys) == ["version", "pid", "boot_id", "monotonic", "identity"],
           let version = jsonInteger(dictionary["version"]), version == 2,
           let processID = jsonInteger(dictionary["pid"]), processID > 0,
-          expectedProcessID == nil || expectedProcessID == processID,
           let storedBootID = dictionary["boot_id"] as? String,
-          normalizeBootID(storedBootID) == normalizedBootID,
+          let normalizedBootID = normalizeBootID(storedBootID),
           let storedIdentity = dictionary["identity"] as? String,
-          normalizeHelperIdentity(storedIdentity) == expectedIdentity,
-          normalizeHelperIdentity(expectedIdentity) != nil,
+          let normalizedIdentity = normalizeHelperIdentity(storedIdentity),
           let timestamp = jsonDouble(dictionary["monotonic"]), timestamp.isFinite else {
         return nil
     }
-    let age = now - timestamp
+    return StoredOwner(
+        processID: processID,
+        bootID: normalizedBootID,
+        monotonic: timestamp,
+        identity: normalizedIdentity
+    )
+}
+
+private func readFreshHeartbeatUnlocked(
+    stateURL: URL,
+    currentBootID: String,
+    now: Double
+) -> StoredOwner? {
+    guard let normalizedBootID = normalizeBootID(currentBootID),
+          now.isFinite,
+          let owner = readStoredOwnerUnlocked(stateURL: stateURL),
+          owner.bootID == normalizedBootID else {
+        return nil
+    }
+    let age = now - owner.monotonic
     guard age >= 0, age <= heartbeatStaleSeconds else { return nil }
-    return processID
+    return owner
 }
 
 private func jsonInteger(_ value: Any?) -> Int? {
