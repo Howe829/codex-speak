@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import fcntl
@@ -13,17 +14,19 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Final, Iterator
+from typing import Final, Iterator, Sequence
 
 from .diagnostics import record
-from .protocol import Announcement, IMPORTANT_STATUSES
+from .protocol import ALL_STATUSES, Announcement
+from .render import MAX_SEGMENT_CHARS, SpeechPayload
 
 
 SETTLE_SECONDS: Final[float] = 1.0
 EXPIRY_SECONDS: Final[float] = 300.0
 DEDUPE_SECONDS: Final[float] = 24 * 60 * 60
 DEDUPE_LIMIT: Final[int] = 512
-FORMAT_VERSION: Final[int] = 2
+FORMAT_VERSION: Final[int] = 3
+MAX_SEGMENTS: Final[int] = 10_000
 _HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
 _BOOT_SESSION_PATH: Final[Path] = Path("/private/var/run/bootSessionMA.txt")
 _CLOCK_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -32,16 +35,28 @@ _CLOCK_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 
+class _ExactArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+
 @dataclass(frozen=True, slots=True)
 class QueueEvent:
     format_version: int
     clock_id: str
     event_id: str
     session_key: str
+    mode: str
     status: str
-    speech_text: str
+    segments: tuple[str, ...]
     created_at: float
     not_before: float
+
+    @property
+    def speech_text(self) -> str:
+        """Compatibility view for callers that still consume one segment at a time."""
+        return "".join(self.segments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,15 +254,22 @@ def _load_dedupe(
     path = data_dir / "dedupe.json"
     existed = path.exists()
     raw = _load_json(path, {})
-    is_v2 = (
+    is_current = (
         isinstance(raw, dict)
         and raw.get("format_version") == FORMAT_VERSION
         and _normalize_clock_id(raw.get("clock_id")) == raw.get("clock_id")
         and isinstance(raw.get("entries"), dict)
     )
-    if is_v2 and raw["clock_id"] == clock_id:
+    is_legacy_envelope = (
+        isinstance(raw, dict)
+        and type(raw.get("format_version")) is int
+        and raw.get("format_version") in {1, 2}
+        and _normalize_clock_id(raw.get("clock_id")) == raw.get("clock_id")
+        and isinstance(raw.get("entries"), dict)
+    )
+    if (is_current or is_legacy_envelope) and raw["clock_id"] == clock_id:
         entries = _same_clock_entries(raw["entries"], now)
-    elif is_v2:
+    elif is_current or is_legacy_envelope:
         entries = _rebased_entries(raw["entries"], now)
     else:
         entries = _rebased_entries(raw, now)
@@ -259,12 +281,25 @@ def _read_event(path: Path) -> QueueEvent:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("event is not an object")
+    if set(raw) != {
+        "format_version",
+        "clock_id",
+        "event_id",
+        "session_key",
+        "mode",
+        "status",
+        "segments",
+        "created_at",
+        "not_before",
+    }:
+        raise ValueError("event has unexpected fields")
     format_version = raw.get("format_version")
     clock_id = raw.get("clock_id")
     event_id = raw.get("event_id")
     session_key = raw.get("session_key")
+    mode = raw.get("mode")
     status = raw.get("status")
-    speech_text = raw.get("speech_text")
+    segments = raw.get("segments")
     created_at = raw.get("created_at")
     not_before = raw.get("not_before")
     if not (
@@ -274,10 +309,18 @@ def _read_event(path: Path) -> QueueEvent:
         and isinstance(session_key, str)
         and len(session_key) == 16
         and all(character in _HEX_DIGITS for character in session_key)
+        and isinstance(mode, str)
+        and mode in {"summary", "full"}
         and isinstance(status, str)
-        and status in IMPORTANT_STATUSES
-        and isinstance(speech_text, str)
-        and bool(speech_text)
+        and status in ALL_STATUSES
+        and (status != "silent" or mode == "full")
+        and isinstance(segments, list)
+        and 1 <= len(segments) <= MAX_SEGMENTS
+        and all(
+            isinstance(segment, str)
+            and 1 <= len(segment) <= MAX_SEGMENT_CHARS
+            for segment in segments
+        )
         and type(created_at) in (int, float)
         and math.isfinite(created_at)
         and type(not_before) in (int, float)
@@ -295,8 +338,9 @@ def _read_event(path: Path) -> QueueEvent:
         clock_id=clock_id,
         event_id=event_id,
         session_key=session_key,
+        mode=mode,
         status=status,
-        speech_text=speech_text,
+        segments=tuple(segments),
         created_at=float(created_at),
         not_before=float(not_before),
     )
@@ -310,6 +354,8 @@ def _superseded_paths(events: list[tuple[Path, QueueEvent]]) -> set[Path]:
         for _, newer in ordered[index + 1 :]:
             if (
                 newer.session_key == older.session_key
+                and newer.mode == "summary"
+                and older.mode == "summary"
                 and older.created_at < newer.not_before
                 and newer.created_at < older.not_before
             ):
@@ -343,7 +389,7 @@ def _discard_expired(data_dir: Path, path: Path, event: QueueEvent) -> None:
 
 def enqueue(
     data_dir: Path,
-    announcement: Announcement,
+    payload: SpeechPayload | Announcement,
     *,
     session_id: str,
     turn_id: str,
@@ -356,6 +402,20 @@ def enqueue(
     spool = _prepare(data_dir)
     event_id = make_event_id(session_id, turn_id)
     session_key = _session_key(session_id)
+    if isinstance(payload, Announcement):
+        payload = SpeechPayload("summary", payload.status, (payload.speech_text,))
+    if not (
+        payload.mode in {"summary", "full"}
+        and payload.status in ALL_STATUSES
+        and (payload.status != "silent" or payload.mode == "full")
+        and 1 <= len(payload.segments) <= MAX_SEGMENTS
+        and all(
+            isinstance(segment, str)
+            and 1 <= len(segment) <= MAX_SEGMENT_CHARS
+            for segment in payload.segments
+        )
+    ):
+        raise ValueError("invalid speech payload")
 
     with _locked(data_dir / "queue.lock", blocking=True) as acquired:
         if not acquired:
@@ -412,7 +472,10 @@ def enqueue(
         superseded = [
             path
             for path, existing in spool_events
-            if existing.session_key == session_key and existing.not_before > timestamp
+            if payload.mode == "summary"
+            and existing.mode == "summary"
+            and existing.session_key == session_key
+            and existing.not_before > timestamp
         ]
 
         sequence = _next_sequence(data_dir)
@@ -421,8 +484,9 @@ def enqueue(
             clock_id=current_clock_id,
             event_id=event_id,
             session_key=session_key,
-            status=announcement.status,
-            speech_text=announcement.speech_text,
+            mode=payload.mode,
+            status=payload.status,
+            segments=payload.segments,
             created_at=timestamp,
             not_before=timestamp + SETTLE_SECONDS,
         )
@@ -527,8 +591,39 @@ def discard_event(data_dir: Path, event_id: str) -> None:
             path.unlink(missing_ok=True)
 
 
+def clear_pending(data_dir: Path) -> int:
+    spool = _prepare(data_dir)
+    with _locked(data_dir / "queue.lock", blocking=True) as acquired:
+        if not acquired:
+            raise OSError("queue lock unavailable")
+        paths = list(spool.glob("*.json"))
+        for path in paths:
+            path.unlink(missing_ok=True)
+        return len(paths)
+
+
 @contextmanager
 def try_worker_lock(data_dir: Path) -> Iterator[bool]:
     _prepare(data_dir)
     with _locked(data_dir / "worker.lock", blocking=False) as acquired:
         yield acquired
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _ExactArgumentParser(prog="python3 -m codex_speak.queue")
+    parser.add_argument("--data-dir", type=Path, required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=_ExactArgumentParser,
+    )
+    subparsers.add_parser("clear-pending")
+    arguments = parser.parse_args(argv)
+    if arguments.command == "clear-pending":
+        print(clear_pending(arguments.data_dir))
+        return 0
+    raise AssertionError("unreachable command")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

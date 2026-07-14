@@ -8,11 +8,20 @@ import stat
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from unittest.mock import Mock, patch
 
 import codex_speak.queue as queue_module
 from codex_speak.protocol import Announcement
-from codex_speak.queue import enqueue, make_event_id, poll_next, try_worker_lock
+from codex_speak.queue import (
+    clear_pending,
+    enqueue,
+    make_event_id,
+    poll_next,
+    try_worker_lock,
+)
+from codex_speak.render import SpeechPayload
 
 
 CLOCK_A = "11111111-1111-1111-1111-111111111111"
@@ -80,6 +89,163 @@ def _poll_after_ready(data_dir: str, connection) -> None:
 
 
 class QueueTests(unittest.TestCase):
+    def test_v3_event_preserves_full_payload_segments_and_silent_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            self.assertTrue(
+                enqueue(
+                    data_dir,
+                    SpeechPayload("full", "silent", ("第一段", "第二段")),
+                    session_id="session",
+                    turn_id="turn",
+                    now=100.0,
+                    clock_id=CLOCK_A,
+                )
+            )
+
+            event = poll_next(
+                data_dir, now=101.0, clock_id=CLOCK_A
+            ).event
+
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertEqual(event.format_version, 3)
+            self.assertEqual(event.mode, "full")
+            self.assertEqual(event.status, "silent")
+            self.assertEqual(event.segments, ("第一段", "第二段"))
+
+    def test_invalid_v3_and_legacy_events_are_deleted_without_playback(self) -> None:
+        event_id = make_event_id("session", "turn")
+        valid = {
+            "format_version": 3,
+            "clock_id": CLOCK_A,
+            "event_id": event_id,
+            "session_key": queue_module._session_key("session"),
+            "mode": "full",
+            "status": "silent",
+            "segments": ["valid"],
+            "created_at": 100.0,
+            "not_before": 101.0,
+        }
+        invalid_events = {
+            "empty segments": {**valid, "segments": []},
+            "empty segment": {**valid, "segments": [""]},
+            "oversized segment": {**valid, "segments": ["x" * 601]},
+            "too many segments": {**valid, "segments": ["x"] * 10_001},
+            "unknown mode": {**valid, "mode": "verbose"},
+            "unknown status": {**valid, "status": "private"},
+            "summary silent": {**valid, "mode": "summary"},
+            "extra field": {**valid, "extra": "private"},
+            "v2 event": {
+                "format_version": 2,
+                "clock_id": CLOCK_A,
+                "event_id": event_id,
+                "session_key": queue_module._session_key("session"),
+                "status": "completed",
+                "speech_text": "legacy",
+                "created_at": 100.0,
+                "not_before": 101.0,
+            },
+            "v1 event": {
+                "event_id": event_id,
+                "session_key": queue_module._session_key("session"),
+                "status": "completed",
+                "speech_text": "legacy",
+                "created_at": 100.0,
+                "not_before": 101.0,
+            },
+        }
+        for name, raw in invalid_events.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                data_dir = Path(temporary)
+                spool = data_dir / "spool"
+                spool.mkdir(mode=0o700)
+                path = spool / f"00000000000000000001-{event_id}.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                path.chmod(0o600)
+
+                result = poll_next(data_dir, now=101.0, clock_id=CLOCK_A)
+
+                self.assertIsNone(result.event)
+                self.assertFalse(path.exists())
+
+    def test_enqueue_rejects_invalid_segmented_payloads(self) -> None:
+        invalid_payloads = (
+            SpeechPayload("summary", "silent", ("text",)),
+            SpeechPayload("unknown", "completed", ("text",)),
+            SpeechPayload("full", "silent", ()),
+            SpeechPayload("full", "silent", ("x" * 601,)),
+            SpeechPayload("full", "silent", ("x",) * 10_001),
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaisesRegex(ValueError, "invalid speech payload"):
+                    enqueue(
+                        Path(temporary),
+                        payload,
+                        session_id="session",
+                        turn_id="turn",
+                        now=100.0,
+                        clock_id=CLOCK_A,
+                    )
+
+    def test_two_full_events_in_one_session_are_played_fifo(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            for turn_id, text, now in (
+                ("turn-1", "first", 100.0),
+                ("turn-2", "second", 100.5),
+            ):
+                self.assertTrue(
+                    enqueue(
+                        data_dir,
+                        SpeechPayload("full", "silent", (text,)),
+                        session_id="same-session",
+                        turn_id=turn_id,
+                        now=now,
+                        clock_id=CLOCK_A,
+                    )
+                )
+
+            self.assertEqual(len(list((data_dir / "spool").glob("*.json"))), 2)
+            spoken = []
+            while True:
+                event = poll_next(
+                    data_dir, now=101.5, clock_id=CLOCK_A
+                ).event
+                if event is None:
+                    break
+                spoken.extend(event.segments)
+            self.assertEqual(spoken, ["first", "second"])
+
+    def test_clear_pending_removes_all_events_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            for index in range(2):
+                self.assertTrue(
+                    enqueue(
+                        data_dir,
+                        SpeechPayload("full", "silent", (f"event-{index}",)),
+                        session_id=f"session-{index}",
+                        turn_id=f"turn-{index}",
+                        now=100.0,
+                        clock_id=CLOCK_A,
+                    )
+                )
+
+            self.assertEqual(clear_pending(data_dir), 2)
+            self.assertEqual(clear_pending(data_dir), 0)
+
+    def test_clear_pending_cli_prints_only_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = StringIO()
+            with redirect_stdout(output):
+                result = queue_module.main(
+                    ["--data-dir", temporary, "clear-pending"]
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(output.getvalue(), "0\n")
+
     def test_default_clock_id_prefers_boot_file_normalizes_and_caches(self) -> None:
         queue_module._default_clock_id.cache_clear()
         try:
@@ -206,6 +372,38 @@ class QueueTests(unittest.TestCase):
                 enqueue(data_dir, announcement, session_id="s", turn_id="t", now=100.1)
             )
 
+    def test_v2_dedupe_envelope_migrates_without_replaying_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            data_dir.chmod(0o700)
+            event_id = make_event_id("session", "turn")
+            dedupe_path = data_dir / "dedupe.json"
+            dedupe_path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 2,
+                        "clock_id": CLOCK_A,
+                        "entries": {event_id: 99.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dedupe_path.chmod(0o600)
+
+            self.assertFalse(
+                enqueue(
+                    data_dir,
+                    SpeechPayload("full", "silent", ("duplicate",)),
+                    session_id="session",
+                    turn_id="turn",
+                    now=100.0,
+                    clock_id=CLOCK_A,
+                )
+            )
+            migrated = json.loads(dedupe_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["format_version"], 3)
+            self.assertEqual(migrated["entries"], {event_id: 99.0})
+
     def test_different_boot_discards_spool_but_preserves_dedupe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
@@ -236,7 +434,7 @@ class QueueTests(unittest.TestCase):
                 (data_dir / "dedupe.json").read_text(encoding="utf-8")
             )
             event_id = make_event_id("session", "turn")
-            self.assertEqual(dedupe["format_version"], 2)
+            self.assertEqual(dedupe["format_version"], 3)
             self.assertEqual(dedupe["clock_id"], CLOCK_B)
             self.assertEqual(dedupe["entries"], {event_id: 100.5})
 
@@ -276,7 +474,7 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(
                 dedupe,
                 {
-                    "format_version": 2,
+                    "format_version": 3,
                     "clock_id": CLOCK_B,
                     "entries": {event_id: 200.0},
                 },
@@ -389,7 +587,7 @@ class QueueTests(unittest.TestCase):
                 dedupe.write_text(
                     json.dumps(
                         {
-                            "format_version": 2,
+                            "format_version": 3,
                             "clock_id": CLOCK_A,
                             "entries": {**crowders, current_id: 99.0},
                         }
@@ -442,14 +640,14 @@ class QueueTests(unittest.TestCase):
             data_dir = Path(temporary)
             enqueue(
                 data_dir,
-                Announcement("completed", "old"),
+                SpeechPayload("summary", "completed", ("old",)),
                 session_id="same-session",
                 turn_id="turn-1",
                 now=100.0,
             )
             enqueue(
                 data_dir,
-                Announcement("action_required", "new"),
+                SpeechPayload("summary", "action_required", ("new",)),
                 session_id="same-session",
                 turn_id="turn-2",
                 now=100.5,
@@ -638,7 +836,7 @@ class QueueTests(unittest.TestCase):
                         **old_payload,
                         "event_id": new_id,
                         "status": "action_required",
-                        "speech_text": "new",
+                        "segments": ["new"],
                         "created_at": 100.5,
                         "not_before": 101.5,
                     }
@@ -681,7 +879,7 @@ class QueueTests(unittest.TestCase):
                         **old_payload,
                         "event_id": later_id,
                         "status": "action_required",
-                        "speech_text": "later-sequence",
+                        "segments": ["later-sequence"],
                         "created_at": 99.5,
                         "not_before": 100.5,
                     }
@@ -849,12 +1047,13 @@ class QueueTests(unittest.TestCase):
                 stale.write_text(
                     json.dumps(
                         {
-                            "format_version": 2,
+                            "format_version": 3,
                             "clock_id": CLOCK_A,
                             "event_id": event_id,
                             "session_key": queue_module._session_key(session_id),
+                            "mode": "summary",
                             "status": "completed",
-                            "speech_text": "stale-matching-event",
+                            "segments": ["stale-matching-event"],
                             "created_at": created_at,
                             "not_before": not_before,
                         }
