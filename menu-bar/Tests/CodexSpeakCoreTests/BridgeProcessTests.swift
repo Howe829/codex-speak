@@ -1,0 +1,364 @@
+import Foundation
+import XCTest
+@testable import CodexSpeakCore
+
+final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
+    func testDecodesReadyBusyAndExactEventWhilePreservingSegmentOrder() throws {
+        XCTAssertEqual(try BridgeMessage.decode(line: #"{"type":"ready"}"#), .ready)
+        XCTAssertEqual(try BridgeMessage.decode(line: #"{"type":"busy"}"#), .busy)
+        XCTAssertEqual(
+            try BridgeMessage.decode(
+                line: #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"silent","segments":["first","second"]}"#
+            ),
+            .event(
+                SpeechEvent(
+                    eventID: "0123456789abcdef01234567",
+                    mode: .full,
+                    status: "silent",
+                    segments: ["first", "second"]
+                )
+            )
+        )
+    }
+
+    func testRejectsNonJSONMissingExtraAndInvalidEventValues() {
+        let invalidLines = [
+            "not-json",
+            #"{"type":"ready","extra":true}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed"}"#,
+            #"{"type":"event","event_id":"0123456789ABCDEF01234567","mode":"full","status":"completed","segments":["ok"]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"verbose","status":"completed","segments":["ok"]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"summary","status":"silent","segments":["ok"]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"private","segments":["ok"]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed","segments":[]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed","segments":[""]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed","segments":["ok"],"extra":true}"#,
+        ]
+        for line in invalidLines {
+            XCTAssertThrowsError(try BridgeMessage.decode(line: line), line)
+        }
+        let oversizedSegment = String(repeating: "x", count: 601)
+        XCTAssertThrowsError(
+            try BridgeMessage.decode(
+                line: #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed","segments":["\#(oversizedSegment)"]}"#
+            )
+        )
+        let tooMany = Array(repeating: "x", count: 10_001)
+        let data = try! JSONSerialization.data(withJSONObject: [
+            "type": "event",
+            "event_id": "0123456789abcdef01234567",
+            "mode": "full",
+            "status": "completed",
+            "segments": tooMany,
+        ])
+        XCTAssertThrowsError(try BridgeMessage.decode(data: data))
+    }
+
+    func testAcceptsMaximumSegmentLengthAndCount() throws {
+        let segments = Array(repeating: String(repeating: "x", count: 600), count: 10_000)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "type": "event",
+            "event_id": "0123456789abcdef01234567",
+            "mode": "full",
+            "status": "completed",
+            "segments": segments,
+        ])
+        guard case let .event(event) = try BridgeMessage.decode(data: data) else {
+            return XCTFail("expected event")
+        }
+        XCTAssertEqual(event.segments.count, 10_000)
+        XCTAssertEqual(event.segments.first?.count, 600)
+    }
+
+    func testBridgeUsesFixedArgumentsAndRetriesBusyAfterOneSecond() async throws {
+        let launcher = ScriptedProcessLauncher(lines: [
+            [#"{"type":"busy"}"#],
+            [#"{"type":"ready"}"#],
+        ])
+        let sleeps = LockedValues<UInt64>()
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            launcher: launcher,
+            sleep: { sleeps.append($0) }
+        )
+        let messages = LockedValues<BridgeMessage>()
+
+        try await bridge.start { messages.append($0) }
+
+        XCTAssertEqual(messages.values, [.busy, .ready])
+        XCTAssertEqual(sleeps.values, [1_000_000_000])
+        XCTAssertEqual(launcher.requests.count, 2)
+        for request in launcher.requests {
+            XCTAssertEqual(request.executableURL.path, "/usr/bin/python3")
+            XCTAssertEqual(
+                request.arguments,
+                ["-m", "codex_speak.bridge", "watch", "--data-dir", "/data"]
+            )
+            XCTAssertEqual(request.currentDirectoryURL.path, "/plugin")
+        }
+    }
+
+    func testBridgeStopTerminatesOnlyCurrentlyOwnedChild() async throws {
+        let process = BlockingManagedProcess()
+        let launcher = HoldingProcessLauncher(process: process)
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            launcher: launcher,
+            sleep: { _ in }
+        )
+        let task = Task { try await bridge.start { _ in } }
+        await launcher.waitUntilLaunched()
+
+        await bridge.stop()
+        _ = try await task.value
+        await bridge.stop()
+
+        XCTAssertEqual(process.terminationCount, 1)
+    }
+
+    func testBusyRetryWaitsForFallbackProcessToExit() async throws {
+        let busyProcess = BlockingManagedProcess()
+        let launcher = SequencedBridgeLauncher(processes: [busyProcess, ImmediateManagedProcess()])
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            launcher: launcher,
+            sleep: { _ in }
+        )
+        let task = Task { try await bridge.start { _ in } }
+        await launcher.waitForLaunchCount(1)
+        await Task.yield()
+        XCTAssertEqual(launcher.requests.count, 1)
+
+        busyProcess.finish(status: 0)
+        try await task.value
+
+        XCTAssertEqual(launcher.requests.count, 2)
+    }
+
+    func testMalformedNDJSONTerminatesOwnedBridgeBeforeThrowing() async {
+        let process = BlockingManagedProcess()
+        let launcher = MalformedBridgeLauncher(process: process)
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            launcher: launcher,
+            sleep: { _ in }
+        )
+
+        do {
+            try await bridge.start { _ in }
+            XCTFail("expected malformed bridge output to fail")
+        } catch {}
+
+        XCTAssertEqual(process.terminationCount, 1)
+    }
+}
+
+final class ControlAndDiagnosticsTests: XCTestCase {
+    func testControlClientsUseFixedArgumentsAndStrictStdout() throws {
+        let runner = RecordingCommandRunner(outputs: ["summary\n", "full\n", "12\n"])
+        let client = ControlClient(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            runner: runner
+        )
+        XCTAssertEqual(try client.getMode(), .summary)
+        try client.setMode(.full)
+        XCTAssertEqual(try client.clearPending(), 12)
+        XCTAssertEqual(runner.requests.map(\.arguments), [
+            ["-m", "codex_speak.settings", "--data-dir", "/data", "get"],
+            ["-m", "codex_speak.settings", "--data-dir", "/data", "set", "full"],
+            ["-m", "codex_speak.queue", "--data-dir", "/data", "clear-pending"],
+        ])
+        XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/usr/bin/python3" })
+        XCTAssertTrue(runner.requests.allSatisfy { $0.currentDirectoryURL.path == "/plugin" })
+    }
+
+    func testControlClientRejectsLooseOrInvalidStdout() {
+        for output in [" summary\n", "summary \n", "summary\nextra\n", "-1\n", "+1\n", "1.0\n"] {
+            let runner = RecordingCommandRunner(outputs: [output])
+            let client = ControlClient(
+                pluginRoot: URL(fileURLWithPath: "/plugin"),
+                dataDirectory: URL(fileURLWithPath: "/data"),
+                runner: runner
+            )
+            if output.contains("summary") {
+                XCTAssertThrowsError(try client.getMode(), output)
+            } else {
+                XCTAssertThrowsError(try client.clearPending(), output)
+            }
+        }
+    }
+
+    func testDiagnosticsUsesOnlyFixedMetadataForSpokenCancelledAndStartFailure() throws {
+        let runner = RecordingCommandRunner(outputs: ["", "", ""])
+        let client = DiagnosticsClient(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            runner: runner
+        )
+        let event = SpeechEvent(
+            eventID: "0123456789abcdef01234567",
+            mode: .full,
+            status: "completed",
+            segments: ["PRIVATE SPEECH"]
+        )
+        try client.record(event: event, result: PlaybackResult(outcome: .spoken, errorCode: nil, completedSegmentCount: 1, durationMilliseconds: 25))
+        try client.record(event: event, result: PlaybackResult(outcome: .cancelled, errorCode: nil, completedSegmentCount: 0, durationMilliseconds: 5))
+        try client.record(event: event, result: PlaybackResult(outcome: .failed, errorCode: .speechStartFailed, completedSegmentCount: 0, durationMilliseconds: 1))
+
+        let prefix = ["-m", "codex_speak.diagnostics", "--data-dir", "/data", "record", "--event-id", event.eventID, "--status", "completed", "--result"]
+        XCTAssertEqual(runner.requests[0].arguments, prefix + ["spoken", "--mode", "full", "--segment-count", "1", "--duration-ms", "25", "--error-code", "NONE"])
+        XCTAssertEqual(runner.requests[1].arguments, prefix + ["cancelled", "--mode", "full", "--segment-count", "0", "--duration-ms", "5", "--error-code", "NONE"])
+        XCTAssertEqual(runner.requests[2].arguments, prefix + ["failed", "--mode", "full", "--segment-count", "0", "--duration-ms", "1", "--error-code", "speech_start_failed"])
+        XCTAssertFalse(runner.requests.flatMap(\.arguments).contains("PRIVATE SPEECH"))
+    }
+}
+
+private final class LockedValues<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Value] = []
+    var values: [Value] { lock.withLock { storage } }
+    func append(_ value: Value) { lock.withLock { storage.append(value) } }
+}
+
+private final class ImmediateManagedProcess: ManagedProcess, @unchecked Sendable {
+    let terminationStatus: Int32
+    init(_ terminationStatus: Int32 = 0) { self.terminationStatus = terminationStatus }
+    func waitUntilExit() async -> Int32 { terminationStatus }
+    func terminate() {}
+}
+
+private final class BlockingManagedProcess: ManagedProcess, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Int32, Never>?
+    private var pendingStatus: Int32?
+    private(set) var terminationCount = 0
+
+    func waitUntilExit() async -> Int32 {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if let pendingStatus {
+                    continuation.resume(returning: pendingStatus)
+                } else {
+                    self.continuation = continuation
+                }
+            }
+        }
+    }
+
+    func terminate() {
+        finish(status: 15, countTermination: true)
+    }
+
+    func finish(status: Int32) {
+        finish(status: status, countTermination: false)
+    }
+
+    private func finish(status: Int32, countTermination: Bool) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Int32, Never>? in
+            if countTermination { terminationCount += 1 }
+            let continuation = self.continuation
+            self.continuation = nil
+            if continuation == nil { pendingStatus = status }
+            return continuation
+        }
+        continuation?.resume(returning: status)
+    }
+}
+
+private final class SequencedBridgeLauncher: ProcessLaunching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var processes: [any ManagedProcess]
+    private(set) var requests: [ProcessLaunchRequest] = []
+    init(processes: [any ManagedProcess]) { self.processes = processes }
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        let (process, line) = lock.withLock { () -> (any ManagedProcess, String) in
+            requests.append(request)
+            let index = requests.count
+            return (processes.removeFirst(), index == 1 ? #"{"type":"busy"}"# : #"{"type":"ready"}"#)
+        }
+        request.standardOutput.fileHandleForWriting.write(Data((line + "\n").utf8))
+        try request.standardOutput.fileHandleForWriting.close()
+        return process
+    }
+    func waitForLaunchCount(_ count: Int) async {
+        while lock.withLock({ requests.count < count }) { await Task.yield() }
+    }
+}
+
+private final class MalformedBridgeLauncher: ProcessLaunching, @unchecked Sendable {
+    let process: BlockingManagedProcess
+    init(process: BlockingManagedProcess) { self.process = process }
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        request.standardOutput.fileHandleForWriting.write(Data("not-json\n".utf8))
+        try request.standardOutput.fileHandleForWriting.close()
+        return process
+    }
+}
+
+private final class ScriptedProcessLauncher: ProcessLaunching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [[String]]
+    private(set) var requests: [ProcessLaunchRequest] = []
+    init(lines: [[String]]) { self.lines = lines }
+
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        let lines = lock.withLock { () -> [String] in
+            requests.append(request)
+            return self.lines.removeFirst()
+        }
+        for line in lines {
+            request.standardOutput.fileHandleForWriting.write(Data((line + "\n").utf8))
+        }
+        try request.standardOutput.fileHandleForWriting.close()
+        return ImmediateManagedProcess()
+    }
+}
+
+private final class HoldingProcessLauncher: ProcessLaunching, @unchecked Sendable {
+    private let process: BlockingManagedProcess
+    private let launched = LockedValues<Bool>()
+    private var output: Pipe?
+    init(process: BlockingManagedProcess) { self.process = process }
+
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        output = request.standardOutput
+        launched.append(true)
+        request.standardOutput.fileHandleForWriting.write(Data("{\"type\":\"ready\"}\n".utf8))
+        return ClosingManagedProcess(base: process) { [weak self] in
+            try? self?.output?.fileHandleForWriting.close()
+        }
+    }
+
+    func waitUntilLaunched() async {
+        while launched.values.isEmpty { await Task.yield() }
+    }
+}
+
+private final class ClosingManagedProcess: ManagedProcess, @unchecked Sendable {
+    private let base: BlockingManagedProcess
+    private let onTerminate: @Sendable () -> Void
+    init(base: BlockingManagedProcess, onTerminate: @escaping @Sendable () -> Void) {
+        self.base = base
+        self.onTerminate = onTerminate
+    }
+    func waitUntilExit() async -> Int32 { await base.waitUntilExit() }
+    func terminate() { onTerminate(); base.terminate() }
+}
+
+private final class RecordingCommandRunner: CommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var outputs: [String]
+    private(set) var requests: [CommandRequest] = []
+    init(outputs: [String]) { self.outputs = outputs }
+    func run(_ request: CommandRequest) throws -> CommandResult {
+        lock.withLock {
+            requests.append(request)
+            return CommandResult(terminationStatus: 0, standardOutput: Data(outputs.removeFirst().utf8))
+        }
+    }
+}
