@@ -89,6 +89,68 @@ def _poll_after_ready(data_dir: str, connection) -> None:
 
 
 class QueueTests(unittest.TestCase):
+    def test_float_v3_format_version_is_deleted_without_playback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            event_id = make_event_id("session", "turn")
+            spool = data_dir / "spool"
+            spool.mkdir(mode=0o700)
+            path = spool / f"00000000000000000001-{event_id}.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 3.0,
+                        "clock_id": CLOCK_A,
+                        "event_id": event_id,
+                        "session_key": queue_module._session_key("session"),
+                        "mode": "full",
+                        "status": "silent",
+                        "segments": ["must not play"],
+                        "created_at": 100.0,
+                        "not_before": 101.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            result = poll_next(data_dir, now=101.0, clock_id=CLOCK_A)
+
+            self.assertIsNone(result.event)
+            self.assertFalse(path.exists())
+
+    def test_float_v3_dedupe_envelope_is_not_accepted_as_current(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            data_dir.mkdir(mode=0o700, exist_ok=True)
+            event_id = make_event_id("session", "turn")
+            dedupe_path = data_dir / "dedupe.json"
+            dedupe_path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 3.0,
+                        "clock_id": CLOCK_A,
+                        "entries": {event_id: 100.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dedupe_path.chmod(0o600)
+
+            self.assertTrue(
+                enqueue(
+                    data_dir,
+                    SpeechPayload("full", "silent", ("play once",)),
+                    session_id="session",
+                    turn_id="turn",
+                    now=100.5,
+                    clock_id=CLOCK_A,
+                )
+            )
+            rewritten = json.loads(dedupe_path.read_text(encoding="utf-8"))
+            self.assertIs(type(rewritten["format_version"]), int)
+            self.assertEqual(rewritten["format_version"], 3)
+
     def test_v3_event_preserves_full_payload_segments_and_silent_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)

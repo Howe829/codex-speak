@@ -256,6 +256,7 @@ def _load_dedupe(
     raw = _load_json(path, {})
     is_current = (
         isinstance(raw, dict)
+        and type(raw.get("format_version")) is int
         and raw.get("format_version") == FORMAT_VERSION
         and _normalize_clock_id(raw.get("clock_id")) == raw.get("clock_id")
         and isinstance(raw.get("entries"), dict)
@@ -303,7 +304,8 @@ def _read_event(path: Path) -> QueueEvent:
     created_at = raw.get("created_at")
     not_before = raw.get("not_before")
     if not (
-        format_version == FORMAT_VERSION
+        type(format_version) is int
+        and format_version == FORMAT_VERSION
         and _normalize_clock_id(clock_id) == clock_id
         and _is_event_id(event_id)
         and isinstance(session_key, str)
