@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -31,6 +33,8 @@ class DiagnosticsTests(unittest.TestCase):
                     "event_id": "a" * 24,
                     "status": "completed",
                     "result": "spoken",
+                    "mode": "unknown",
+                    "segment_count": 0,
                     "duration_ms": 42,
                     "error_code": None,
                 },
@@ -46,7 +50,10 @@ class DiagnosticsTests(unittest.TestCase):
             ("event_id", "/Users/private/voice.wav"),
             ("status", "user said a secret"),
             ("result", "speech contents"),
+            ("mode", "https://private.example/speech"),
             ("error_code", "path:/private/recording.wav"),
+            ("error_code", "voice-message.aiff"),
+            ("error_code", "RuntimeError: private exception detail"),
         )
         for field, invalid_value in invalid_cases:
             with self.subTest(field=field, invalid_value=invalid_value):
@@ -56,11 +63,206 @@ class DiagnosticsTests(unittest.TestCase):
                         "event_id": "a" * 24,
                         "status": "completed",
                         "result": "spoken",
+                        "mode": "summary",
                         "error_code": None,
                     }
                     values[field] = invalid_value
                     record(data_dir, **values)
                     self.assertFalse((data_dir / "diagnostics.jsonl").exists())
+
+    def test_accepts_expanded_fixed_metadata(self) -> None:
+        error_codes = (
+            "unsupported_platform",
+            "say_unavailable",
+            "invalid_hook_input",
+            "invalid_marker",
+            "queue_corrupt",
+            "expired",
+            "say_failed",
+            "queue_failed",
+            "worker_start_failed",
+            "invalid_settings",
+            "helper_start_failed",
+            "invalid_event",
+            "stale_event",
+            "boot_mismatch",
+            "speech_start_failed",
+            "cancel_identity_mismatch",
+            "queue_clear_failed",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            for index, error_code in enumerate(error_codes):
+                record(
+                    data_dir,
+                    event_id=f"{index:024x}",
+                    status="completed",
+                    result="cancelled" if index == 0 else "spoken",
+                    mode="full" if index % 2 else "summary",
+                    segment_count=min(index, 10_000),
+                    duration_ms=index,
+                    error_code=error_code,
+                )
+            entries = [
+                json.loads(line)
+                for line in (data_dir / "diagnostics.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+            self.assertEqual(len(entries), len(error_codes))
+            self.assertEqual(entries[0]["result"], "cancelled")
+            self.assertEqual(entries[0]["mode"], "summary")
+            self.assertEqual(entries[-1]["error_code"], "queue_clear_failed")
+            self.assertEqual(
+                set(entries[0]),
+                {
+                    "timestamp",
+                    "event_id",
+                    "status",
+                    "result",
+                    "mode",
+                    "segment_count",
+                    "duration_ms",
+                    "error_code",
+                },
+            )
+
+    def test_rejects_invalid_mode_and_segment_count(self) -> None:
+        invalid_cases = (
+            {"mode": True},
+            {"mode": "private speech"},
+            {"segment_count": True},
+            {"segment_count": -1},
+            {"segment_count": 10_001},
+            {"segment_count": 1.0},
+            {"segment_count": "1"},
+        )
+        for invalid_values in invalid_cases:
+            with self.subTest(invalid_values=invalid_values):
+                with tempfile.TemporaryDirectory() as temporary:
+                    data_dir = Path(temporary)
+                    values = {
+                        "event_id": "a" * 24,
+                        "status": "completed",
+                        "result": "spoken",
+                        "mode": "summary",
+                        "segment_count": 1,
+                    }
+                    values.update(invalid_values)
+                    record(data_dir, **values)
+                    self.assertFalse((data_dir / "diagnostics.jsonl").exists())
+
+    def test_segment_count_boundaries_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            for index, segment_count in enumerate((0, 10_000)):
+                record(
+                    data_dir,
+                    event_id=f"{index:024x}",
+                    status="completed",
+                    result="spoken",
+                    mode="unknown",
+                    segment_count=segment_count,
+                )
+            entries = [
+                json.loads(line)
+                for line in (data_dir / "diagnostics.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            ]
+            self.assertEqual(
+                [entry["segment_count"] for entry in entries],
+                [0, 10_000],
+            )
+
+    def test_cli_records_metadata_and_prints_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary)
+            completed = self._run_cli(
+                data_dir,
+                "record",
+                "--event-id",
+                "a" * 24,
+                "--status",
+                "completed",
+                "--mode",
+                "summary",
+                "--result",
+                "spoken",
+                "--segment-count",
+                "1",
+                "--duration-ms",
+                "25",
+                "--error-code",
+                "NONE",
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, "")
+            self.assertEqual(completed.stderr, "")
+            payload = json.loads(
+                (data_dir / "diagnostics.jsonl").read_text(encoding="utf-8")
+            )
+            self.assertEqual(payload["error_code"], None)
+            self.assertEqual(payload["segment_count"], 1)
+
+    def test_cli_rejects_sensitive_values_without_echoing_them(self) -> None:
+        sensitive_values = (
+            "secret speech content",
+            "https://private.example/audio",
+            "/Users/private/audio.wav",
+            "private-recording.aiff",
+            "RuntimeError: secret exception",
+        )
+        for sensitive_value in sensitive_values:
+            with self.subTest(sensitive_value=sensitive_value):
+                with tempfile.TemporaryDirectory() as temporary:
+                    data_dir = Path(temporary)
+                    completed = self._run_cli(
+                        data_dir,
+                        "record",
+                        "--event-id",
+                        "a" * 24,
+                        "--status",
+                        "completed",
+                        "--mode",
+                        "summary",
+                        "--result",
+                        "spoken",
+                        "--segment-count",
+                        "1",
+                        "--duration-ms",
+                        "25",
+                        "--error-code",
+                        sensitive_value,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertNotIn(sensitive_value, completed.stdout)
+                    self.assertNotIn(sensitive_value, completed.stderr)
+                    self.assertFalse(
+                        (data_dir / "diagnostics.jsonl").exists()
+                    )
+
+    @staticmethod
+    def _run_cli(
+        data_dir: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "codex_speak.diagnostics",
+                "--data-dir",
+                str(data_dir),
+                *arguments,
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
 
     def test_invalid_or_overflowing_duration_is_ignored(self) -> None:
         for invalid_duration in (True, -1, 1.5, "42", float("inf")):
@@ -99,6 +301,8 @@ class DiagnosticsTests(unittest.TestCase):
             "event_id": "b" * 24,
             "status": "blocked",
             "result": "failed",
+            "mode": "unknown",
+            "segment_count": 0,
             "duration_ms": 0,
             "error_code": "say_failed",
         }

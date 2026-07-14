@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-from typing import Final
+from typing import Final, Sequence
 
 
 MAX_BYTES: Final[int] = 256 * 1024
@@ -12,7 +13,10 @@ _HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
 _STATUSES: Final[frozenset[str]] = frozenset(
     {"completed", "blocked", "action_required", "silent", "unknown"}
 )
-_RESULTS: Final[frozenset[str]] = frozenset({"spoken", "failed", "discarded"})
+_RESULTS: Final[frozenset[str]] = frozenset(
+    {"spoken", "failed", "discarded", "cancelled"}
+)
+_MODES: Final[frozenset[str]] = frozenset({"summary", "full", "unknown"})
 _ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
         "unsupported_platform",
@@ -24,6 +28,14 @@ _ERROR_CODES: Final[frozenset[str]] = frozenset(
         "say_failed",
         "queue_failed",
         "worker_start_failed",
+        "invalid_settings",
+        "helper_start_failed",
+        "invalid_event",
+        "stale_event",
+        "boot_mismatch",
+        "speech_start_failed",
+        "cancel_identity_mismatch",
+        "queue_clear_failed",
     }
 )
 
@@ -32,6 +44,9 @@ def _metadata_is_valid(
     event_id: object,
     status: object,
     result: object,
+    mode: object,
+    segment_count: object,
+    duration_ms: object,
     error_code: object,
 ) -> bool:
     return (
@@ -42,6 +57,12 @@ def _metadata_is_valid(
         and status in _STATUSES
         and isinstance(result, str)
         and result in _RESULTS
+        and isinstance(mode, str)
+        and mode in _MODES
+        and type(segment_count) is int
+        and 0 <= segment_count <= 10_000
+        and type(duration_ms) is int
+        and duration_ms >= 0
         and (
             error_code is None
             or isinstance(error_code, str)
@@ -75,6 +96,8 @@ def record(
     event_id: str,
     status: str,
     result: str,
+    mode: str = "unknown",
+    segment_count: int = 0,
     duration_ms: int = 0,
     error_code: str | None = None,
     now: datetime | None = None,
@@ -83,9 +106,15 @@ def record(
         return
     if now is not None and not isinstance(now, datetime):
         return
-    if not _metadata_is_valid(event_id, status, result, error_code):
-        return
-    if type(duration_ms) is not int or duration_ms < 0:
+    if not _metadata_is_valid(
+        event_id,
+        status,
+        result,
+        mode,
+        segment_count,
+        duration_ms,
+        error_code,
+    ):
         return
     descriptor: int | None = None
     try:
@@ -95,6 +124,8 @@ def record(
             "event_id": event_id,
             "status": status,
             "result": result,
+            "mode": mode,
+            "segment_count": segment_count,
             "duration_ms": duration_ms,
             "error_code": error_code,
         }
@@ -123,3 +154,73 @@ def record(
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+class _CliError(Exception):
+    pass
+
+
+class _StrictArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise _CliError from None
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _StrictArgumentParser(prog="python3 -m codex_speak.diagnostics")
+    parser.add_argument("--data-dir", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=_StrictArgumentParser,
+    )
+    record_parser = subparsers.add_parser("record")
+    record_parser.add_argument("--event-id", required=True)
+    record_parser.add_argument("--status", required=True)
+    record_parser.add_argument("--result", required=True)
+    record_parser.add_argument("--mode", required=True)
+    record_parser.add_argument("--segment-count", required=True)
+    record_parser.add_argument("--duration-ms", required=True)
+    record_parser.add_argument("--error-code", required=True)
+    return parser
+
+
+def _cli_integer(value: str) -> int | None:
+    try:
+        return int(value, 10)
+    except (TypeError, ValueError):
+        return None
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        arguments = _parser().parse_args(argv)
+    except (_CliError, SystemExit):
+        return 2
+    segment_count = _cli_integer(arguments.segment_count)
+    duration_ms = _cli_integer(arguments.duration_ms)
+    error_code = None if arguments.error_code == "NONE" else arguments.error_code
+    if not _metadata_is_valid(
+        arguments.event_id,
+        arguments.status,
+        arguments.result,
+        arguments.mode,
+        segment_count,
+        duration_ms,
+        error_code,
+    ):
+        return 2
+    record(
+        Path(arguments.data_dir),
+        event_id=arguments.event_id,
+        status=arguments.status,
+        result=arguments.result,
+        mode=arguments.mode,
+        segment_count=segment_count,
+        duration_ms=duration_ms,
+        error_code=error_code,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

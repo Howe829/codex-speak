@@ -1,0 +1,105 @@
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+import unittest
+
+from codex_speak.settings import load_mode, save_mode
+
+
+class SettingsTests(unittest.TestCase):
+    def test_default_private_and_persistent(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(load_mode(root), "summary")
+            self.assertEqual(
+                stat.S_IMODE((root / "settings.json").stat().st_mode),
+                0o600,
+            )
+            self.assertEqual(save_mode(root, "full"), "full")
+            self.assertEqual(load_mode(root), "full")
+
+    def test_invalid_repairs_to_summary(self) -> None:
+        invalid_values = (
+            {"version": 1, "mode": "bad"},
+            {"version": 1, "mode": "summary", "extra": True},
+            {"version": True, "mode": "summary"},
+            {"version": 2, "mode": "summary"},
+            {"version": 1, "mode": True},
+            [1, "summary"],
+        )
+        for invalid_value in invalid_values:
+            with self.subTest(invalid_value=invalid_value):
+                with TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    path = root / "settings.json"
+                    path.write_text(json.dumps(invalid_value), encoding="utf-8")
+                    self.assertEqual(load_mode(root), "summary")
+                    self.assertEqual(
+                        json.loads(path.read_text(encoding="utf-8")),
+                        {"version": 1, "mode": "summary"},
+                    )
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_save_rejects_invalid_modes(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for invalid_mode in (True, None, "bad", "SUMMARY", 1):
+                with self.subTest(invalid_mode=invalid_mode):
+                    with self.assertRaises(ValueError):
+                        save_mode(root, invalid_mode)
+            self.assertFalse((root / "settings.json").exists())
+
+    def test_atomic_write_leaves_no_temporary_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(save_mode(root, "summary"), "summary")
+            self.assertEqual(
+                [path.name for path in root.iterdir()],
+                ["settings.json"],
+            )
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
+    def test_cli_get_and_set_print_only_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            get_default = self._run_cli(root, "get")
+            self.assertEqual(get_default.returncode, 0)
+            self.assertEqual(get_default.stdout, "summary\n")
+            self.assertEqual(get_default.stderr, "")
+
+            set_full = self._run_cli(root, "set", "full")
+            self.assertEqual(set_full.returncode, 0)
+            self.assertEqual(set_full.stdout, "full\n")
+            self.assertEqual(set_full.stderr, "")
+
+            get_full = self._run_cli(root, "get")
+            self.assertEqual(get_full.returncode, 0)
+            self.assertEqual(get_full.stdout, "full\n")
+            self.assertEqual(get_full.stderr, "")
+
+    @staticmethod
+    def _run_cli(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "codex_speak.settings",
+                "--data-dir",
+                str(root),
+                *arguments,
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
