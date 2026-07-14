@@ -30,6 +30,7 @@ final class MenuController: NSObject {
         dataDirectory: URL,
         pythonExecutableURL: URL,
         helperIdentity: String,
+        helperToken: String,
         configURL: URL
     ) throws {
         self.application = application
@@ -51,7 +52,8 @@ final class MenuController: NSObject {
         )
         heartbeat = try Heartbeat(
             stateURL: dataDirectory.appendingPathComponent("helper-state.json"),
-            identity: helperIdentity
+            identity: helperIdentity,
+            token: helperToken
         )
         self.configURL = configURL
         self.pluginRoot = pluginRoot

@@ -1,7 +1,6 @@
 import io
 import json
 from pathlib import Path
-import signal
 import stat
 import sys
 import tempfile
@@ -14,6 +13,8 @@ from codex_speak.render import SpeechPayload
 
 
 CLOCK = "11111111-1111-1111-1111-111111111111"
+TOKEN_A = "a" * 64
+TOKEN_B = "b" * 64
 
 
 class InspectingOutput(io.StringIO):
@@ -137,11 +138,13 @@ class BridgeTests(unittest.TestCase):
             identity = helper._helper_identity(root)
             executable = root / "helper"
             state = {
-                "version": 2,
+                "version": 3,
+                "phase": "running",
                 "pid": 321,
                 "boot_id": CLOCK,
                 "monotonic": 100.0,
                 "identity": identity,
+                "token": TOKEN_A,
             }
             (data_dir / "helper-state.json").write_text(
                 json.dumps(state), encoding="utf-8"
@@ -168,11 +171,13 @@ class BridgeTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 2,
+                        "version": 3,
+                        "phase": "running",
                         "pid": 321,
                         "boot_id": CLOCK,
                         "monotonic": 100.0,
                         "identity": helper._helper_identity(old_root),
+                        "token": TOKEN_A,
                     }
                 ),
                 encoding="utf-8",
@@ -183,6 +188,7 @@ class BridgeTests(unittest.TestCase):
                     current_boot_id=CLOCK,
                     now=101.0,
                     expected_identity="0" * 64,
+                    expected_token=TOKEN_A,
                 )
             )
 
@@ -190,7 +196,6 @@ class BridgeTests(unittest.TestCase):
                 pid = 444
 
             launches = []
-            kill_calls = []
 
             def sleep(_seconds):
                 if not launches:
@@ -199,20 +204,22 @@ class BridgeTests(unittest.TestCase):
                 state_path.write_text(
                     json.dumps(
                         {
-                            "version": 2,
+                            "version": 3,
+                            "phase": "running",
                             "pid": 444,
                             "boot_id": CLOCK,
                             "monotonic": 100.0,
                             "identity": helper._helper_identity(root),
+                            "token": launches[0][-1],
                         }
                     ),
                     encoding="utf-8",
                 )
 
-            def kill(pid, requested_signal):
-                kill_calls.append((pid, requested_signal))
-
-            with patch("codex_speak.helper.os.kill", side_effect=kill):
+            with patch(
+                "codex_speak.helper.os.kill",
+                side_effect=AssertionError("must never signal state PID"),
+            ) as kill:
                 helper.launch_verified_helper(
                     Path("/helper"),
                     root,
@@ -225,7 +232,7 @@ class BridgeTests(unittest.TestCase):
                     sleep=sleep,
                 )
             identity = helper._helper_identity(root)
-            self.assertEqual(kill_calls, [(321, signal.SIGTERM), (321, 0)])
+            kill.assert_not_called()
             self.assertEqual(len(identity), 64)
             self.assertNotIn(str(root), identity)
             self.assertEqual(
@@ -240,8 +247,11 @@ class BridgeTests(unittest.TestCase):
                     str(Path(sys.executable)),
                     "--helper-identity",
                     identity,
+                    "--helper-token",
+                    launches[0][-1],
                 ]],
             )
+            self.assertEqual(len(launches[0][-1]), 64)
 
     def test_version_one_heartbeat_is_not_accepted_after_identity_upgrade(self) -> None:
         helper = self._helper()
@@ -258,12 +268,41 @@ class BridgeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+
+    def test_unhashable_handshake_phase_is_rejected_without_raising(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "helper-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 3,
+                        "phase": [],
+                        "pid": 0,
+                        "boot_id": CLOCK,
+                        "monotonic": 100.0,
+                        "identity": "0" * 64,
+                        "token": TOKEN_A,
+                    }
+                ),
+                encoding="utf-8",
+            )
             self.assertIsNone(
                 helper._read_current_state(
                     state_path,
                     current_boot_id=CLOCK,
                     now=101.0,
                     expected_identity="0" * 64,
+                    expected_token=TOKEN_A,
+                )
+            )
+            self.assertIsNone(
+                helper._read_current_state(
+                    state_path,
+                    current_boot_id=CLOCK,
+                    now=101.0,
+                    expected_identity="0" * 64,
+                    expected_token=TOKEN_A,
                 )
             )
 
@@ -287,16 +326,22 @@ class BridgeTests(unittest.TestCase):
                     rendezvous.wait(timeout=0.2)
                 except threading.BrokenBarrierError:
                     pass
-                identity = helper._helper_identity(root)
                 state_path = data_dir / "helper-state.json"
+                reservation = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(reservation["version"], 3)
+                self.assertEqual(reservation["phase"], "starting")
+                self.assertEqual(reservation["pid"], 0)
+                self.assertEqual(reservation["token"], arguments[-1])
                 state_path.write_text(
                     json.dumps(
                         {
-                            "version": 2,
+                            "version": 3,
+                            "phase": "running",
                             "pid": 444,
                             "boot_id": CLOCK,
                             "monotonic": 100.0,
-                            "identity": identity,
+                            "identity": helper._helper_identity(root),
+                            "token": arguments[-1],
                         }
                     ),
                     encoding="utf-8",
@@ -327,6 +372,98 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(failures, [])
             self.assertEqual(len(launches), 1)
 
+    def test_unconfirmed_reservation_is_not_active_and_spawn_failure_cleans_it(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "plugin"
+            root.mkdir()
+            data_dir = Path(temporary) / "data"
+            state_path = data_dir / "helper-state.json"
+
+            def fail_after_reservation(arguments, **_kwargs):
+                reservation = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(reservation["phase"], "starting")
+                self.assertEqual(reservation["pid"], 0)
+                self.assertEqual(reservation["token"], arguments[-1])
+                self.assertIsNone(
+                    helper._read_current_state(
+                        state_path,
+                        current_boot_id=CLOCK,
+                        now=100.0,
+                        expected_identity=helper._helper_identity(root),
+                        expected_token=arguments[-1],
+                    )
+                )
+                raise OSError("spawn failed")
+
+            with self.assertRaises(OSError):
+                helper.launch_verified_helper(
+                    Path("/helper"),
+                    root,
+                    data_dir,
+                    monotonic=lambda: 100.0,
+                    boot_id_loader=lambda: CLOCK,
+                    popen=fail_after_reservation,
+                    sleep=lambda _: None,
+                )
+            self.assertFalse(state_path.exists())
+
+    def test_spawn_failure_does_not_delete_replacement_reservation(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "plugin"
+            root.mkdir()
+            data_dir = Path(temporary) / "data"
+            state_path = data_dir / "helper-state.json"
+
+            def replace_then_fail(arguments, **_kwargs):
+                reservation = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(reservation["token"], arguments[-1])
+                replacement = dict(reservation, token=TOKEN_B)
+                state_path.write_text(json.dumps(replacement), encoding="utf-8")
+                raise OSError("spawn failed")
+
+            with self.assertRaises(OSError):
+                helper.launch_verified_helper(
+                    Path("/helper"),
+                    root,
+                    data_dir,
+                    monotonic=lambda: 100.0,
+                    boot_id_loader=lambda: CLOCK,
+                    popen=replace_then_fail,
+                    sleep=lambda _: None,
+                )
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8"))["token"],
+                TOKEN_B,
+            )
+
+    def test_preflight_failure_leaves_no_reservation(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "plugin"
+            root.mkdir()
+            data_dir = Path(temporary) / "data"
+            state_path = data_dir / "helper-state.json"
+            with (
+                patch.object(
+                    helper,
+                    "_validated_python_executable",
+                    side_effect=OSError("unavailable"),
+                ),
+                self.assertRaises(OSError),
+            ):
+                helper.launch_verified_helper(
+                    Path("/helper"),
+                    root,
+                    data_dir,
+                    monotonic=lambda: 100.0,
+                    boot_id_loader=lambda: CLOCK,
+                    popen=lambda *_args, **_kwargs: self.fail("spawned"),
+                    sleep=lambda _: None,
+                )
+            self.assertFalse(state_path.exists())
+
     def test_stale_or_invalid_heartbeat_is_removed_without_signaling_pid(self) -> None:
         helper = self._helper()
         with tempfile.TemporaryDirectory() as temporary:
@@ -355,14 +492,17 @@ class BridgeTests(unittest.TestCase):
 
             def sleep(_seconds):
                 sleeps.append(True)
+                reservation = json.loads(state_path.read_text(encoding="utf-8"))
                 state_path.write_text(
                     json.dumps(
                         {
-                            "version": 2,
+                            "version": 3,
+                            "phase": "running",
                             "pid": 444,
                             "boot_id": CLOCK,
                             "monotonic": 100.0,
                             "identity": helper._helper_identity(root),
+                            "token": reservation["token"],
                         }
                     ),
                     encoding="utf-8",
@@ -394,6 +534,8 @@ class BridgeTests(unittest.TestCase):
                     str(Path(sys.executable)),
                     "--helper-identity",
                     helper._helper_identity(root),
+                    "--helper-token",
+                    launches[0][-1],
                 ]],
             )
 

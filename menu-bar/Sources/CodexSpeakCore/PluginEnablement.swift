@@ -19,21 +19,24 @@ public struct StrictMenuArguments: Equatable, Sendable {
     public let dataDirectoryPath: String
     public let pythonExecutablePath: String
     public let helperIdentity: String
+    public let helperToken: String
 
     public init(
         pluginRootPath: String,
         dataDirectoryPath: String,
         pythonExecutablePath: String,
-        helperIdentity: String
+        helperIdentity: String,
+        helperToken: String
     ) {
         self.pluginRootPath = pluginRootPath
         self.dataDirectoryPath = dataDirectoryPath
         self.pythonExecutablePath = pythonExecutablePath
         self.helperIdentity = helperIdentity
+        self.helperToken = helperToken
     }
 
     public static func parse(_ arguments: [String]) throws -> StrictMenuArguments {
-        guard arguments.count == 8 else { throw StrictMenuArgumentError.invalid }
+        guard arguments.count == 10 else { throw StrictMenuArgumentError.invalid }
         var values: [String: String] = [:]
         var index = 0
         while index < arguments.count {
@@ -41,10 +44,11 @@ public struct StrictMenuArguments: Equatable, Sendable {
             guard flag == "--plugin-root"
                     || flag == "--data-dir"
                     || flag == "--python-executable"
-                    || flag == "--helper-identity",
+                    || flag == "--helper-identity"
+                    || flag == "--helper-token",
                   values[flag] == nil else { throw StrictMenuArgumentError.invalid }
             let value = arguments[index + 1]
-            guard flag == "--helper-identity"
+            guard flag == "--helper-identity" || flag == "--helper-token"
                     || NSString(string: value).isAbsolutePath else {
                 throw StrictMenuArgumentError.invalid
             }
@@ -56,6 +60,8 @@ public struct StrictMenuArguments: Equatable, Sendable {
               let pythonExecutable = values["--python-executable"],
               let helperIdentity = values["--helper-identity"],
               isValidHelperIdentity(helperIdentity),
+              let helperToken = values["--helper-token"],
+              isValidHelperIdentity(helperToken),
               isExecutableFile(atPath: pythonExecutable) else {
             throw StrictMenuArgumentError.invalid
         }
@@ -63,7 +69,8 @@ public struct StrictMenuArguments: Equatable, Sendable {
             pluginRootPath: pluginRoot,
             dataDirectoryPath: dataDirectory,
             pythonExecutablePath: pythonExecutable,
-            helperIdentity: helperIdentity
+            helperIdentity: helperIdentity,
+            helperToken: helperToken
         )
     }
 }

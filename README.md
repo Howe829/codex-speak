@@ -79,9 +79,10 @@ input, never process arguments.
 
 Diagnostics contain only timestamps, hashed event identifiers, allowlisted
 status/outcome values, counts, duration, and fixed error codes. The menu
-helper-state contains only its schema version, PID, boot identity, monotonic
-heartbeat, and a fixed-length SHA-256 identity of the canonical plugin root.
-It never stores the raw plugin path, plugin version, or speech content.
+helper-state contains only its schema version, starting/running phase, PID,
+boot identity, monotonic heartbeat, a fixed-length SHA-256 identity of the
+canonical plugin root, and a random fixed-length handshake token. It never
+stores the raw plugin path, plugin version, or speech content.
 No component performs network access. Automated privacy canaries cover prompt,
 body, summary, code, URL, path, segmented speech, success, failure, and cancel
 paths; fake runners ensure tests never produce sound.
