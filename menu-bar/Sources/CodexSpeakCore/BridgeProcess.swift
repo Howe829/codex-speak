@@ -85,15 +85,17 @@ private final class PipeReader: @unchecked Sendable {
 public actor BridgeProcess {
     private let pluginRoot: URL
     private let dataDirectory: URL
+    private let pythonExecutableURL: URL
     private let launcher: any ProcessLaunching
     private let sleep: @Sendable (UInt64) async -> Void
     private var lifecycleID: UUID?
     private var active: (id: UUID, process: any ManagedProcess)?
     private var stopping = false
 
-    public init(pluginRoot: URL, dataDirectory: URL) {
+    public init(pluginRoot: URL, dataDirectory: URL, pythonExecutableURL: URL) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         launcher = FoundationProcessLauncher()
         sleep = { try? await Task.sleep(nanoseconds: $0) }
     }
@@ -101,11 +103,13 @@ public actor BridgeProcess {
     init(
         pluginRoot: URL,
         dataDirectory: URL,
+        pythonExecutableURL: URL,
         launcher: any ProcessLaunching,
         sleep: @escaping @Sendable (UInt64) async -> Void
     ) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         self.launcher = launcher
         self.sleep = sleep
     }
@@ -122,7 +126,7 @@ public actor BridgeProcess {
             let standardInput = Pipe()
             let standardOutput = Pipe()
             let request = ProcessLaunchRequest(
-                executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
+                executableURL: pythonExecutableURL,
                 arguments: ["-m", "codex_speak.bridge", "watch", "--data-dir", dataDirectory.path],
                 currentDirectoryURL: pluginRoot,
                 standardInput: standardInput,

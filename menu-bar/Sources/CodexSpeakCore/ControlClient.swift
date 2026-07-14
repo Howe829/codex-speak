@@ -43,17 +43,25 @@ public protocol ControlClientProtocol: Sendable {
 public struct ControlClient: ControlClientProtocol, Sendable {
     private let pluginRoot: URL
     private let dataDirectory: URL
+    private let pythonExecutableURL: URL
     private let runner: any CommandRunning
 
-    public init(pluginRoot: URL, dataDirectory: URL) {
+    public init(pluginRoot: URL, dataDirectory: URL, pythonExecutableURL: URL) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         runner = FoundationCommandRunner()
     }
 
-    init(pluginRoot: URL, dataDirectory: URL, runner: any CommandRunning) {
+    init(
+        pluginRoot: URL,
+        dataDirectory: URL,
+        pythonExecutableURL: URL,
+        runner: any CommandRunning
+    ) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         self.runner = runner
     }
 
@@ -82,7 +90,7 @@ public struct ControlClient: ControlClientProtocol, Sendable {
 
     private func run(module: String, tail: [String]) throws -> String {
         let request = CommandRequest(
-            executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
+            executableURL: pythonExecutableURL,
             arguments: ["-m", module, "--data-dir", dataDirectory.path] + tail,
             currentDirectoryURL: pluginRoot
         )

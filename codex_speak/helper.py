@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Callable, Final
 
@@ -22,6 +23,17 @@ HELPER_STATE: Final[str] = "helper-state.json"
 STATE_VERSION: Final[int] = 1
 HEARTBEAT_STALE_SECONDS: Final[float] = 5.0
 VERIFY_ATTEMPTS: Final[int] = 60
+
+
+def _validated_python_executable() -> Path:
+    executable = Path(sys.executable)
+    if (
+        not executable.is_absolute()
+        or not executable.is_file()
+        or not os.access(executable, os.X_OK)
+    ):
+        raise OSError("python executable unavailable")
+    return executable
 
 
 def record_helper_start_failed_without_exception_text(data_dir: Path) -> None:
@@ -88,6 +100,8 @@ def launch_verified_helper(
     popen: Callable[..., subprocess.Popen] = subprocess.Popen,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
+    if not all(path.is_absolute() for path in (executable, plugin_root, data_dir)):
+        raise OSError("helper launch paths must be absolute")
     boot_id = boot_id_loader()
     normalized_boot_id = _normalize_clock_id(boot_id)
     if normalized_boot_id is None:
@@ -114,6 +128,8 @@ def launch_verified_helper(
             str(plugin_root),
             "--data-dir",
             str(data_dir),
+            "--python-executable",
+            str(_validated_python_executable()),
         ],
         cwd=str(plugin_root),
         stdin=subprocess.DEVNULL,

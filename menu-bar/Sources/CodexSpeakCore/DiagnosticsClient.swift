@@ -3,23 +3,31 @@ import Foundation
 public struct DiagnosticsClient: Sendable {
     private let pluginRoot: URL
     private let dataDirectory: URL
+    private let pythonExecutableURL: URL
     private let runner: any CommandRunning
 
-    public init(pluginRoot: URL, dataDirectory: URL) {
+    public init(pluginRoot: URL, dataDirectory: URL, pythonExecutableURL: URL) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         runner = FoundationCommandRunner()
     }
 
-    init(pluginRoot: URL, dataDirectory: URL, runner: any CommandRunning) {
+    init(
+        pluginRoot: URL,
+        dataDirectory: URL,
+        pythonExecutableURL: URL,
+        runner: any CommandRunning
+    ) {
         self.pluginRoot = pluginRoot
         self.dataDirectory = dataDirectory
+        self.pythonExecutableURL = pythonExecutableURL
         self.runner = runner
     }
 
     public func record(event: SpeechEvent, result: PlaybackResult) throws {
         let request = CommandRequest(
-            executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
+            executableURL: pythonExecutableURL,
             arguments: [
                 "-m", "codex_speak.diagnostics",
                 "--data-dir", dataDirectory.path,

@@ -27,13 +27,26 @@ final class MenuController: NSObject {
         application: NSApplication = .shared,
         pluginRoot: URL,
         dataDirectory: URL,
+        pythonExecutableURL: URL,
         configURL: URL
     ) throws {
         self.application = application
-        controlClient = ControlClient(pluginRoot: pluginRoot, dataDirectory: dataDirectory)
-        diagnosticsClient = DiagnosticsClient(pluginRoot: pluginRoot, dataDirectory: dataDirectory)
+        controlClient = ControlClient(
+            pluginRoot: pluginRoot,
+            dataDirectory: dataDirectory,
+            pythonExecutableURL: pythonExecutableURL
+        )
+        diagnosticsClient = DiagnosticsClient(
+            pluginRoot: pluginRoot,
+            dataDirectory: dataDirectory,
+            pythonExecutableURL: pythonExecutableURL
+        )
         speechPlayer = SpeechPlayer()
-        bridge = BridgeProcess(pluginRoot: pluginRoot, dataDirectory: dataDirectory)
+        bridge = BridgeProcess(
+            pluginRoot: pluginRoot,
+            dataDirectory: dataDirectory,
+            pythonExecutableURL: pythonExecutableURL
+        )
         heartbeat = try Heartbeat(stateURL: dataDirectory.appendingPathComponent("helper-state.json"))
         self.configURL = configURL
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)

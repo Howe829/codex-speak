@@ -90,6 +90,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         let bridge = BridgeProcess(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             launcher: launcher,
             sleep: { sleeps.append($0) }
         )
@@ -101,7 +102,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(sleeps.values, [1_000_000_000])
         XCTAssertEqual(launcher.requests.count, 2)
         for request in launcher.requests {
-            XCTAssertEqual(request.executableURL.path, "/usr/bin/python3")
+            XCTAssertEqual(request.executableURL.path, "/custom/python")
             XCTAssertEqual(
                 request.arguments,
                 ["-m", "codex_speak.bridge", "watch", "--data-dir", "/data"]
@@ -116,6 +117,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         let bridge = BridgeProcess(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             launcher: launcher,
             sleep: { _ in }
         )
@@ -136,6 +138,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         let bridge = BridgeProcess(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             launcher: launcher,
             sleep: { _ in }
         )
@@ -160,6 +163,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         let bridge = BridgeProcess(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             launcher: launcher,
             sleep: { _ in }
         )
@@ -180,6 +184,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         let bridge = BridgeProcess(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             launcher: launcher,
             sleep: { _ in }
         )
@@ -190,6 +195,46 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         } catch {}
 
         XCTAssertEqual(process.terminationCount, 1)
+    }
+
+    func testRealBridgeAndControlSmokeWithCompatibleInterpreter() async throws {
+        guard let pythonPath = ProcessInfo.processInfo.environment["CODEX_SPEAK_TEST_PYTHON"] else {
+            throw XCTSkip("set CODEX_SPEAK_TEST_PYTHON to run the real runtime smoke")
+        }
+        let pythonURL = URL(fileURLWithPath: pythonPath)
+        guard FileManager.default.isExecutableFile(atPath: pythonURL.path) else {
+            throw XCTSkip("CODEX_SPEAK_TEST_PYTHON is not executable")
+        }
+        let pluginRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let dataDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dataDirectory) }
+
+        let control = ControlClient(
+            pluginRoot: pluginRoot,
+            dataDirectory: dataDirectory,
+            pythonExecutableURL: pythonURL
+        )
+        try control.setMode(.full)
+        XCTAssertEqual(try control.getMode(), .full)
+        XCTAssertEqual(try control.clearPending(), 0)
+
+        let messages = LockedValues<BridgeMessage>()
+        let bridge = BridgeProcess(
+            pluginRoot: pluginRoot,
+            dataDirectory: dataDirectory,
+            pythonExecutableURL: pythonURL
+        )
+        let bridgeTask = Task { try await bridge.start { messages.append($0) } }
+        while messages.values.isEmpty { await Task.yield() }
+        await bridge.stop()
+        try await bridgeTask.value
+        XCTAssertEqual(messages.values, [.ready])
     }
 
     private func decodeEvent(segment: String) throws -> BridgeMessage {
@@ -210,6 +255,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         let client = ControlClient(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             runner: runner
         )
         XCTAssertEqual(try client.getMode(), .summary)
@@ -220,7 +266,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
             ["-m", "codex_speak.settings", "--data-dir", "/data", "set", "full"],
             ["-m", "codex_speak.queue", "--data-dir", "/data", "clear-pending"],
         ])
-        XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/usr/bin/python3" })
+        XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/custom/python" })
         XCTAssertTrue(runner.requests.allSatisfy { $0.currentDirectoryURL.path == "/plugin" })
     }
 
@@ -230,6 +276,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
             let client = ControlClient(
                 pluginRoot: URL(fileURLWithPath: "/plugin"),
                 dataDirectory: URL(fileURLWithPath: "/data"),
+                pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
                 runner: runner
             )
             if output.contains("summary") {
@@ -245,6 +292,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         let client = DiagnosticsClient(
             pluginRoot: URL(fileURLWithPath: "/plugin"),
             dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
             runner: runner
         )
         let event = SpeechEvent(
@@ -261,6 +309,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         XCTAssertEqual(runner.requests[0].arguments, prefix + ["spoken", "--mode", "full", "--segment-count", "1", "--duration-ms", "25", "--error-code", "NONE"])
         XCTAssertEqual(runner.requests[1].arguments, prefix + ["cancelled", "--mode", "full", "--segment-count", "0", "--duration-ms", "5", "--error-code", "NONE"])
         XCTAssertEqual(runner.requests[2].arguments, prefix + ["failed", "--mode", "full", "--segment-count", "0", "--duration-ms", "1", "--error-code", "speech_start_failed"])
+        XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/custom/python" })
         XCTAssertFalse(runner.requests.flatMap(\.arguments).contains("PRIVATE SPEECH"))
     }
 }

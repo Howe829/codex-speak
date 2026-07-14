@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -171,6 +172,7 @@ class BridgeTests(unittest.TestCase):
                 pid = 444
 
             sleeps = []
+            launches = []
 
             def sleep(_seconds):
                 sleeps.append(True)
@@ -193,11 +195,61 @@ class BridgeTests(unittest.TestCase):
                     data_dir,
                     monotonic=lambda: 100.0,
                     boot_id_loader=lambda: CLOCK,
-                    popen=lambda *_args, **_kwargs: Process(),
+                    popen=lambda arguments, **_kwargs: (
+                        launches.append(arguments) or Process()
+                    ),
                     sleep=sleep,
                 )
             kill.assert_not_called()
             self.assertTrue(sleeps)
+            self.assertEqual(
+                launches,
+                [[
+                    "/helper",
+                    "--plugin-root",
+                    str(root),
+                    "--data-dir",
+                    str(data_dir),
+                    "--python-executable",
+                    str(Path(sys.executable)),
+                ]],
+            )
+
+    def test_python_executable_must_be_absolute_file_and_executable(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            non_executable = Path(temporary) / "python"
+            non_executable.write_text("", encoding="utf-8")
+            invalid_values = [
+                "python3",
+                str(non_executable),
+                str(Path(temporary) / "missing"),
+            ]
+            for invalid in invalid_values:
+                with patch.object(helper.sys, "executable", invalid):
+                    with self.assertRaises(OSError):
+                        helper._validated_python_executable()
+
+        self.assertEqual(helper._validated_python_executable(), Path(sys.executable))
+
+    def test_helper_launch_rejects_relative_launch_paths(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            absolute = Path(temporary)
+            cases = [
+                (Path("helper"), absolute / "plugin", absolute / "data"),
+                (absolute / "helper", Path("plugin"), absolute / "data"),
+                (absolute / "helper", absolute / "plugin", Path("data")),
+            ]
+            for executable, plugin_root, data_dir in cases:
+                with self.assertRaises(OSError):
+                    helper.launch_verified_helper(
+                        executable,
+                        plugin_root,
+                        data_dir,
+                        boot_id_loader=lambda: CLOCK,
+                        popen=lambda *_args, **_kwargs: self.fail("launched"),
+                    )
 
     def test_helper_launch_failure_records_only_fixed_metadata_then_falls_back(self) -> None:
         helper = self._helper()

@@ -17,19 +17,27 @@ public let codexSpeakMenuItemTitles = [
 public struct StrictMenuArguments: Equatable, Sendable {
     public let pluginRootPath: String
     public let dataDirectoryPath: String
+    public let pythonExecutablePath: String
 
-    public init(pluginRootPath: String, dataDirectoryPath: String) {
+    public init(
+        pluginRootPath: String,
+        dataDirectoryPath: String,
+        pythonExecutablePath: String
+    ) {
         self.pluginRootPath = pluginRootPath
         self.dataDirectoryPath = dataDirectoryPath
+        self.pythonExecutablePath = pythonExecutablePath
     }
 
     public static func parse(_ arguments: [String]) throws -> StrictMenuArguments {
-        guard arguments.count == 4 else { throw StrictMenuArgumentError.invalid }
+        guard arguments.count == 6 else { throw StrictMenuArgumentError.invalid }
         var values: [String: String] = [:]
         var index = 0
         while index < arguments.count {
             let flag = arguments[index]
-            guard flag == "--plugin-root" || flag == "--data-dir",
+            guard flag == "--plugin-root"
+                    || flag == "--data-dir"
+                    || flag == "--python-executable",
                   values[flag] == nil else { throw StrictMenuArgumentError.invalid }
             let value = arguments[index + 1]
             guard NSString(string: value).isAbsolutePath else { throw StrictMenuArgumentError.invalid }
@@ -37,9 +45,24 @@ public struct StrictMenuArguments: Equatable, Sendable {
             index += 2
         }
         guard let pluginRoot = values["--plugin-root"],
-              let dataDirectory = values["--data-dir"] else { throw StrictMenuArgumentError.invalid }
-        return StrictMenuArguments(pluginRootPath: pluginRoot, dataDirectoryPath: dataDirectory)
+              let dataDirectory = values["--data-dir"],
+              let pythonExecutable = values["--python-executable"],
+              isExecutableFile(atPath: pythonExecutable) else {
+            throw StrictMenuArgumentError.invalid
+        }
+        return StrictMenuArguments(
+            pluginRootPath: pluginRoot,
+            dataDirectoryPath: dataDirectory,
+            pythonExecutablePath: pythonExecutable
+        )
     }
+}
+
+private func isExecutableFile(atPath path: String) -> Bool {
+    var isDirectory = ObjCBool(false)
+    return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+        && !isDirectory.boolValue
+        && FileManager.default.isExecutableFile(atPath: path)
 }
 
 private enum StrictMenuArgumentError: Error {

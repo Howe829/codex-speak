@@ -19,7 +19,7 @@ do {
     arguments = try StrictMenuArguments.parse(Array(CommandLine.arguments.dropFirst()))
 } catch {
     FileHandle.standardError.write(
-        Data("usage: CodexSpeakMenu --plugin-root ABSOLUTE --data-dir ABSOLUTE\n".utf8)
+        Data("usage: CodexSpeakMenu --plugin-root ABSOLUTE --data-dir ABSOLUTE --python-executable ABSOLUTE\n".utf8)
     )
     exit(2)
 }
@@ -28,12 +28,14 @@ let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
 let pluginRoot = URL(fileURLWithPath: arguments.pluginRootPath, isDirectory: true)
 let dataDirectory = URL(fileURLWithPath: arguments.dataDirectoryPath, isDirectory: true)
+let pythonExecutableURL = URL(fileURLWithPath: arguments.pythonExecutablePath)
 let controller: MenuController
 do {
     controller = try MenuController(
         application: application,
         pluginRoot: pluginRoot,
         dataDirectory: dataDirectory,
+        pythonExecutableURL: pythonExecutableURL,
         configURL: codexConfigURL()
     )
     try controller.start()
