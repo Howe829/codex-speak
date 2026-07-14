@@ -66,6 +66,15 @@ class RenderTests(unittest.TestCase):
         body = "前文\n````python\nx = 1\n````\n后文"
         self.assertEqual(normalize_full_text(body), "前文 代码 后文")
 
+    def test_normalizes_fence_closed_by_longer_matching_delimiter(self) -> None:
+        cases = (
+            "前文\n```python\nx = 1\n````\n后文",
+            "前文\n~~~python\nx = 1\n~~~~\n后文",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), "前文 代码 后文")
+
     def test_does_not_match_mismatched_fence_delimiters(self) -> None:
         body = "前文\n```python\nx = 1\n~~~\n后文"
         self.assertEqual(

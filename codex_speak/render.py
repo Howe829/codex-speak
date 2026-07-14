@@ -11,9 +11,8 @@ from .protocol import ParsedResponse
 SpeechMode = Literal["summary", "full"]
 MAX_SEGMENT_CHARS: Final[int] = 600
 
-_FENCED_CODE_RE = re.compile(
-    r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*\r?\n"
-    r".*?^[ \t]*(?P=fence)[ \t]*$"
+_FENCE_OPEN_RE = re.compile(
+    r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*(?:\r?\n|\Z)"
 )
 _IMAGE_RE = re.compile(r"!\[[^\]\r\n]*\]\([^\)\r\n]*\)")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
@@ -56,9 +55,26 @@ def _remove_unicode_controls(value: str) -> str:
     )
 
 
+def _replace_fenced_code(value: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    while opening := _FENCE_OPEN_RE.search(value, cursor):
+        fence = opening.group("fence")
+        closing_re = re.compile(
+            rf"(?m)^[ \t]*{re.escape(fence[0])}{{{len(fence)},}}[ \t]*(?=\r?$)"
+        )
+        closing = closing_re.search(value, opening.end())
+        if closing is None:
+            break
+        parts.extend((value[cursor : opening.start()], "代码"))
+        cursor = closing.end()
+    parts.append(value[cursor:])
+    return "".join(parts)
+
+
 def normalize_full_text(value: str) -> str:
     text = _remove_unicode_controls(value)
-    text = _FENCED_CODE_RE.sub("代码", text)
+    text = _replace_fenced_code(text)
     text = _IMAGE_RE.sub("图片", text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
     text = _INLINE_CODE_RE.sub("代码", text)
