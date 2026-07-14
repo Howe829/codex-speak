@@ -1,18 +1,17 @@
 {
   "name": "codex-speak",
-  "version": "0.1.0",
-  "description": "Codex Speak plugin",
-  "author": {
-    "name": "Local developer"
-  },
-  "skills": "./skills/",
+  "version": "0.2.0",
+  "description": "Speaks concise Codex outcomes or complete responses on macOS.",
+  "author": {"name": "Howard"},
+  "license": "MIT",
+  "keywords": ["codex", "speech", "voice", "macos", "productivity"],
   "interface": {
     "displayName": "Codex Speak",
-    "shortDescription": "Use Codex Speak in Codex.",
-    "longDescription": "Codex Speak adds a local Codex plugin scaffold.",
-    "developerName": "Local developer",
+    "shortDescription": "Speaks Codex summaries or full responses on macOS",
+    "longDescription": "Choose concise outcome summaries or complete Codex responses, then control playback from a private local menu bar helper.",
+    "developerName": "Howard",
     "category": "Productivity",
-    "capabilities": [],
-    "defaultPrompt": "Help me use Codex Speak."
+    "capabilities": ["Notifications"],
+    "defaultPrompt": ["Explain how Codex Speak works."]
   }
 }
