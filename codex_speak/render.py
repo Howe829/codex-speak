@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+import unicodedata
+from typing import Final, Literal
+
+from .protocol import ParsedResponse
+
+
+SpeechMode = Literal["summary", "full"]
+MAX_SEGMENT_CHARS: Final[int] = 600
+
+_FENCED_CODE_RE = re.compile(
+    r"(?ms)^[ \t]*(?:```|~~~)[^\r\n]*\r?\n.*?^[ \t]*(?:```|~~~)[ \t]*$"
+)
+_IMAGE_RE = re.compile(r"!\[[^\]\r\n]*\]\([^\)\r\n]*\)")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
+_INLINE_CODE_RE = re.compile(r"`+[^`\r\n]*`+")
+_URL_RE = re.compile(r"https?://[^\s,，。！？!?]+")
+_PATH_RE = re.compile(
+    r"(?<![\w])(?:~|/)(?:[^/,，\s。；！？!?()\[\]{}]+/)*"
+    r"[^/,，\s。；！？!?()\[\]{}]+"
+)
+_TABLE_SEPARATOR_RE = re.compile(
+    r"(?m)^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$"
+)
+_MARKDOWN_LINE_PREFIX_RE = re.compile(
+    r"(?m)^[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|(?:[-+*]|\d+[.)])[ \t]+)"
+)
+_EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
+_WHITESPACE_RE = re.compile(r"\s+")
+_SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？.!?")
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechPayload:
+    mode: str
+    status: str
+    segments: tuple[str, ...]
+
+
+def _remove_unicode_controls(value: str) -> str:
+    return "".join(
+        "\n"
+        if char in {"\r", "\n"}
+        else " "
+        if char.isspace()
+        else ""
+        if unicodedata.category(char) in {"Cc", "Cf"}
+        else char
+        for char in value
+    )
+
+
+def normalize_full_text(value: str) -> str:
+    text = _remove_unicode_controls(value)
+    text = _FENCED_CODE_RE.sub("代码", text)
+    text = _IMAGE_RE.sub("图片", text)
+    text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
+    text = _INLINE_CODE_RE.sub("代码", text)
+    text = _URL_RE.sub("链接", text)
+    text = _PATH_RE.sub("相关文件", text)
+    text = _TABLE_SEPARATOR_RE.sub("", text)
+    text = _MARKDOWN_LINE_PREFIX_RE.sub("", text)
+    text = text.replace("|", " ")
+    text = _EMPHASIS_RE.sub("", text)
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _preferred_boundary(value: str, limit: int) -> int:
+    paragraph = value.rfind("\n\n", 0, limit)
+    if paragraph >= 0:
+        return paragraph + 2
+
+    for index in range(limit - 1, -1, -1):
+        if value[index] in _SENTENCE_ENDINGS:
+            return index + 1
+
+    whitespace = 0
+    for match in re.finditer(r"\s+", value[:limit]):
+        whitespace = match.end()
+    return whitespace or limit
+
+
+def segment_text(
+    value: str, limit: int = MAX_SEGMENT_CHARS
+) -> tuple[str, ...]:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    if not value:
+        return ()
+
+    segments: list[str] = []
+    remaining = value
+    while len(remaining) > limit:
+        boundary = _preferred_boundary(remaining, limit)
+        segments.append(remaining[:boundary])
+        remaining = remaining[boundary:]
+    if remaining:
+        segments.append(remaining)
+    return tuple(segments)
+
+
+def render_speech(
+    response: ParsedResponse, mode: SpeechMode
+) -> SpeechPayload | None:
+    if mode == "summary":
+        if response.status == "silent":
+            return None
+        text = response.summary_text
+    elif mode == "full":
+        text = normalize_full_text(response.visible_body)
+    else:
+        raise ValueError(f"unsupported speech mode: {mode}")
+
+    segments = segment_text(text)
+    if not segments:
+        return None
+    return SpeechPayload(mode, response.status, segments)

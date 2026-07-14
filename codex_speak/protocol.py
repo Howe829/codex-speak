@@ -13,8 +13,11 @@ IMPORTANT_STATUSES: Final[frozenset[str]] = frozenset(
 ALL_STATUSES: Final[frozenset[str]] = IMPORTANT_STATUSES | {"silent"}
 HARD_LIMIT: Final[int] = 280
 
-_MARKER_RE = re.compile(
+_LEGACY_MARKER_RE = re.compile(
     r"<!-- codex-voice-notifier:v1 (?P<payload>\{[^\r\n]*\}) -->\s*\Z"
+)
+_MARKER_RE = re.compile(
+    r"(?:\A|\n)<!-- codex-speak:v1 (?P<payload>\{[^\r\n]*\}) -->\s*\Z"
 )
 _WHITESPACE_RE = re.compile(r"\s+")
 _URL_RE = re.compile(r"https?://[^\s,，。！？!?]+")
@@ -34,6 +37,13 @@ _SENTENCE_ENDINGS: Final[tuple[str, ...]] = ("。", "！", "？", ".", "!", "?")
 class Announcement:
     status: str
     speech_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedResponse:
+    status: str
+    summary_text: str
+    visible_body: str
 
 
 def _sanitize_speech_text(value: str) -> str:
@@ -60,16 +70,9 @@ def _sanitize_speech_text(value: str) -> str:
     return candidate.rstrip()
 
 
-def extract_announcement(message: str | None) -> Announcement | None:
-    if not isinstance(message, str):
-        return None
-
-    match = _MARKER_RE.search(message)
-    if match is None:
-        return None
-
+def _parse_exact_payload(payload_text: str) -> tuple[str, str] | None:
     try:
-        payload = json.loads(match.group("payload"))
+        payload = json.loads(payload_text)
     except (json.JSONDecodeError, TypeError):
         return None
 
@@ -89,8 +92,40 @@ def extract_announcement(message: str | None) -> Announcement | None:
     if status == "silent":
         if speech_text:
             return None
-        return Announcement(status="silent", speech_text="")
+        return "silent", ""
 
     if not speech_text:
         return None
+    return status, speech_text
+
+
+def extract_response(message: str | None) -> ParsedResponse | None:
+    if not isinstance(message, str):
+        return None
+
+    matches = list(_MARKER_RE.finditer(message))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    parsed = _parse_exact_payload(match.group("payload"))
+    if parsed is None:
+        return None
+    if "codex-speak:v1" in message[: match.start()]:
+        return None
+    status, summary = parsed
+    return ParsedResponse(status, summary, message[: match.start()].rstrip())
+
+
+def extract_announcement(message: str | None) -> Announcement | None:
+    """Parse the legacy protocol while staged callers migrate to ParsedResponse."""
+    if not isinstance(message, str):
+        return None
+
+    match = _LEGACY_MARKER_RE.search(message)
+    if match is None:
+        return None
+    parsed = _parse_exact_payload(match.group("payload"))
+    if parsed is None:
+        return None
+    status, speech_text = parsed
     return Announcement(status=status, speech_text=speech_text)
