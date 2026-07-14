@@ -66,7 +66,7 @@ public enum BridgeMessage: Equatable, Sendable {
                   status != "silent" || mode == .full,
                   let segments = dictionary["segments"] as? [String],
                   (1...10_000).contains(segments.count),
-                  segments.allSatisfy({ (1...600).contains($0.count) }) else {
+                  segments.allSatisfy({ (1...600).contains($0.unicodeScalars.count) }) else {
                 throw CodexSpeakError.invalidBridgeMessage
             }
             return .event(SpeechEvent(eventID: eventID, mode: mode, status: status, segments: segments))

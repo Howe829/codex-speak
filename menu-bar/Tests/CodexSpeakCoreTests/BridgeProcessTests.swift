@@ -70,6 +70,17 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(event.segments.first?.count, 600)
     }
 
+    func testSegmentLengthMatchesPythonUnicodeCodePointCount() throws {
+        let combiningPair = "e\u{301}"
+        let sixHundredScalars = String(repeating: combiningPair, count: 300)
+        let sixHundredOneScalars = sixHundredScalars + "e"
+
+        XCTAssertEqual(sixHundredScalars.unicodeScalars.count, 600)
+        XCTAssertEqual(sixHundredOneScalars.unicodeScalars.count, 601)
+        XCTAssertNoThrow(try decodeEvent(segment: sixHundredScalars))
+        XCTAssertThrowsError(try decodeEvent(segment: sixHundredOneScalars))
+    }
+
     func testBridgeUsesFixedArgumentsAndRetriesBusyAfterOneSecond() async throws {
         let launcher = ScriptedProcessLauncher(lines: [
             [#"{"type":"busy"}"#],
@@ -118,6 +129,31 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(process.terminationCount, 1)
     }
 
+    func testConcurrentStartsLaunchOnlyOneOwnedChildAndStopTerminatesIt() async throws {
+        let firstProcess = BlockingManagedProcess()
+        let secondProcess = BlockingManagedProcess()
+        let launcher = ConcurrentHoldingProcessLauncher(processes: [firstProcess, secondProcess])
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            launcher: launcher,
+            sleep: { _ in }
+        )
+        let firstStart = Task { try await bridge.start { _ in } }
+        await launcher.waitForLaunchCount(1)
+        let secondStart = Task { try await bridge.start { _ in } }
+        await launcher.waitForConcurrentStartToSettle()
+
+        await bridge.stop()
+
+        XCTAssertEqual(launcher.requests.count, 1)
+        XCTAssertEqual(firstProcess.terminationCount, 1)
+        XCTAssertEqual(secondProcess.terminationCount, 0)
+        launcher.finishAll()
+        try await firstStart.value
+        try await secondStart.value
+    }
+
     func testBusyRetryWaitsForFallbackProcessToExit() async throws {
         let busyProcess = BlockingManagedProcess()
         let launcher = SequencedBridgeLauncher(processes: [busyProcess, ImmediateManagedProcess()])
@@ -154,6 +190,17 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         } catch {}
 
         XCTAssertEqual(process.terminationCount, 1)
+    }
+
+    private func decodeEvent(segment: String) throws -> BridgeMessage {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "type": "event",
+            "event_id": "0123456789abcdef01234567",
+            "mode": "full",
+            "status": "completed",
+            "segments": [segment],
+        ])
+        return try BridgeMessage.decode(data: data)
     }
 }
 
@@ -336,6 +383,43 @@ private final class HoldingProcessLauncher: ProcessLaunching, @unchecked Sendabl
 
     func waitUntilLaunched() async {
         while launched.values.isEmpty { await Task.yield() }
+    }
+}
+
+private final class ConcurrentHoldingProcessLauncher: ProcessLaunching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var processes: [BlockingManagedProcess]
+    private var outputs: [Pipe] = []
+    private(set) var requests: [ProcessLaunchRequest] = []
+
+    init(processes: [BlockingManagedProcess]) {
+        self.processes = processes
+    }
+
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        let process = lock.withLock { () -> BlockingManagedProcess in
+            requests.append(request)
+            outputs.append(request.standardOutput)
+            return processes[requests.count - 1]
+        }
+        request.standardOutput.fileHandleForWriting.write(Data("{\"type\":\"ready\"}\n".utf8))
+        return ClosingManagedProcess(base: process) {
+            try? request.standardOutput.fileHandleForWriting.close()
+        }
+    }
+
+    func waitForLaunchCount(_ count: Int) async {
+        while lock.withLock({ requests.count < count }) { await Task.yield() }
+    }
+
+    func waitForConcurrentStartToSettle() async {
+        for _ in 0..<100 { await Task.yield() }
+    }
+
+    func finishAll() {
+        let values = lock.withLock { (processes, outputs) }
+        for output in values.1 { try? output.fileHandleForWriting.close() }
+        for process in values.0 { process.finish(status: 0) }
     }
 }
 

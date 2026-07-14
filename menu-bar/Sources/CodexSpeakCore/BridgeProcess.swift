@@ -87,6 +87,7 @@ public actor BridgeProcess {
     private let dataDirectory: URL
     private let launcher: any ProcessLaunching
     private let sleep: @Sendable (UInt64) async -> Void
+    private var lifecycleID: UUID?
     private var active: (id: UUID, process: any ManagedProcess)?
     private var stopping = false
 
@@ -110,6 +111,12 @@ public actor BridgeProcess {
     }
 
     public func start(onMessage: @escaping @Sendable (BridgeMessage) -> Void) async throws {
+        guard lifecycleID == nil else { return }
+        let lifecycleIdentity = UUID()
+        lifecycleID = lifecycleIdentity
+        defer {
+            if lifecycleID == lifecycleIdentity { lifecycleID = nil }
+        }
         stopping = false
         repeat {
             let standardInput = Pipe()
