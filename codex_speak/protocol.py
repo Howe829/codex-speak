@@ -13,9 +13,6 @@ IMPORTANT_STATUSES: Final[frozenset[str]] = frozenset(
 ALL_STATUSES: Final[frozenset[str]] = IMPORTANT_STATUSES | {"silent"}
 HARD_LIMIT: Final[int] = 280
 
-_LEGACY_MARKER_RE = re.compile(
-    r"<!-- codex-voice-notifier:v1 (?P<payload>\{[^\r\n]*\}) -->\s*\Z"
-)
 _MARKER_RE = re.compile(
     r"(?:\A|\n)<!-- codex-speak:v1 (?P<payload>\{[^\r\n]*\}) -->\s*\Z"
 )
@@ -31,12 +28,6 @@ _MARKDOWN_LINE_PREFIX_RE = re.compile(
 _STRIKETHROUGH_RE = re.compile(r"~~")
 _MARKDOWN_RE = re.compile(r"[`*_#]+")
 _SENTENCE_ENDINGS: Final[tuple[str, ...]] = ("。", "！", "？", ".", "!", "?")
-
-
-@dataclass(frozen=True, slots=True)
-class Announcement:
-    status: str
-    speech_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,18 +105,3 @@ def extract_response(message: str | None) -> ParsedResponse | None:
         return None
     status, summary = parsed
     return ParsedResponse(status, summary, message[: match.start()].rstrip())
-
-
-def extract_announcement(message: str | None) -> Announcement | None:
-    """Parse the legacy protocol while staged callers migrate to ParsedResponse."""
-    if not isinstance(message, str):
-        return None
-
-    match = _LEGACY_MARKER_RE.search(message)
-    if match is None:
-        return None
-    parsed = _parse_exact_payload(match.group("payload"))
-    if parsed is None:
-        return None
-    status, speech_text = parsed
-    return Announcement(status=status, speech_text=speech_text)

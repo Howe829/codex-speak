@@ -13,7 +13,6 @@ from io import StringIO
 from unittest.mock import Mock, patch
 
 import codex_speak.queue as queue_module
-from codex_speak.protocol import Announcement
 from codex_speak.queue import (
     clear_pending,
     enqueue,
@@ -28,10 +27,14 @@ CLOCK_A = "11111111-1111-1111-1111-111111111111"
 CLOCK_B = "22222222-2222-2222-2222-222222222222"
 
 
+def summary_payload(status: str, text: str) -> SpeechPayload:
+    return SpeechPayload("summary", status, (text,))
+
+
 def _enqueue_in_process(data_dir: str, index: int, results) -> None:
     queued = enqueue(
         Path(data_dir),
-        Announcement("completed", f"event-{index}"),
+        summary_payload("completed", f"event-{index}"),
         session_id=f"session-{index}",
         turn_id=f"turn-{index}",
     )
@@ -58,7 +61,7 @@ def _enqueue_after_ready(data_dir: str, connection) -> None:
     with patch("codex_speak.queue.fcntl.flock", side_effect=tracked_flock):
         queued = enqueue(
             Path(data_dir),
-            Announcement("completed", "delayed"),
+            summary_payload("completed", "delayed"),
             session_id="delayed-session",
             turn_id="delayed-turn",
         )
@@ -368,7 +371,7 @@ class QueueTests(unittest.TestCase):
             data_dir = Path(temporary)
             queued = enqueue(
                 data_dir,
-                Announcement("completed", "任务完成"),
+                summary_payload("completed", "任务完成"),
                 session_id="session",
                 turn_id="turn",
                 now=100.0,
@@ -397,7 +400,7 @@ class QueueTests(unittest.TestCase):
     def test_default_relative_timing_uses_monotonic_not_wall_clock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
-            announcement = Announcement("completed", "monotonic event")
+            announcement = summary_payload("completed", "monotonic event")
             with (
                 patch(
                     "codex_speak.queue.time.time",
@@ -426,7 +429,7 @@ class QueueTests(unittest.TestCase):
     def test_duplicate_event_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
-            announcement = Announcement("completed", "once")
+            announcement = summary_payload("completed", "once")
             self.assertTrue(
                 enqueue(data_dir, announcement, session_id="s", turn_id="t", now=100.0)
             )
@@ -469,7 +472,7 @@ class QueueTests(unittest.TestCase):
     def test_different_boot_discards_spool_but_preserves_dedupe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
-            announcement = Announcement("completed", "stale speech")
+            announcement = summary_payload("completed", "stale speech")
             self.assertTrue(
                 enqueue(
                     data_dir,
@@ -544,7 +547,7 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "duplicate"),
+                    summary_payload("completed", "duplicate"),
                     session_id="legacy-session",
                     turn_id="legacy-turn",
                     now=200.1,
@@ -559,7 +562,7 @@ class QueueTests(unittest.TestCase):
                 self.assertTrue(
                     enqueue(
                         data_dir,
-                        Announcement("completed", f"stale-{index}"),
+                        summary_payload("completed", f"stale-{index}"),
                         session_id=f"stale-session-{index}",
                         turn_id=f"stale-turn-{index}",
                         now=100.0 + index / 10,
@@ -577,7 +580,7 @@ class QueueTests(unittest.TestCase):
                 self.assertTrue(
                     enqueue(
                         data_dir,
-                        Announcement("completed", f"fresh-{index}"),
+                        summary_payload("completed", f"fresh-{index}"),
                         session_id=f"fresh-session-{index}",
                         turn_id=f"fresh-turn-{index}",
                         now=100.2 + index / 10,
@@ -605,7 +608,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "do not speak"),
+                    summary_payload("completed", "do not speak"),
                     session_id="session",
                     turn_id="turn",
                     now=100.0,
@@ -661,7 +664,7 @@ class QueueTests(unittest.TestCase):
                 self.assertFalse(
                     enqueue(
                         data_dir,
-                        Announcement("completed", "duplicate"),
+                        summary_payload("completed", "duplicate"),
                         session_id=session_id,
                         turn_id=turn_id,
                         now=100.0,
@@ -675,7 +678,7 @@ class QueueTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
-            announcement = Announcement("completed", "once")
+            announcement = summary_payload("completed", "once")
             self.assertTrue(
                 enqueue(data_dir, announcement, session_id="s", turn_id="t", now=100.0)
             )
@@ -724,7 +727,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "old"),
+                    summary_payload("completed", "old"),
                     session_id="same-session",
                     turn_id="turn-1",
                     now=100.0,
@@ -746,7 +749,7 @@ class QueueTests(unittest.TestCase):
             ):
                 enqueue(
                     data_dir,
-                    Announcement("action_required", "new"),
+                    summary_payload("action_required", "new"),
                     session_id="same-session",
                     turn_id="turn-2",
                     now=100.5,
@@ -761,7 +764,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "old"),
+                    summary_payload("completed", "old"),
                     session_id="same-session",
                     turn_id="turn-1",
                     now=100.0,
@@ -787,7 +790,7 @@ class QueueTests(unittest.TestCase):
             ):
                 enqueue(
                     data_dir,
-                    Announcement("action_required", "new"),
+                    summary_payload("action_required", "new"),
                     session_id="same-session",
                     turn_id="turn-2",
                     now=100.5,
@@ -796,7 +799,7 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(
                 enqueue(
                     data_dir,
-                    Announcement("action_required", "new"),
+                    summary_payload("action_required", "new"),
                     session_id="same-session",
                     turn_id="turn-2",
                     now=100.6,
@@ -812,7 +815,7 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(
                 enqueue(
                     data_dir,
-                    Announcement("action_required", "new"),
+                    summary_payload("action_required", "new"),
                     session_id="same-session",
                     turn_id="turn-2",
                     now=102.1,
@@ -840,7 +843,7 @@ class QueueTests(unittest.TestCase):
             ):
                 enqueue(
                     data_dir,
-                    Announcement("completed", "crash-event"),
+                    summary_payload("completed", "crash-event"),
                     session_id="crash-session",
                     turn_id="crash-turn",
                     now=100.0,
@@ -867,7 +870,7 @@ class QueueTests(unittest.TestCase):
             self.assertFalse(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "crash-event"),
+                    summary_payload("completed", "crash-event"),
                     session_id="crash-session",
                     turn_id="crash-turn",
                     now=101.1,
@@ -880,7 +883,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "old"),
+                    summary_payload("completed", "old"),
                     session_id="same-session",
                     turn_id="turn-1",
                     now=100.0,
@@ -923,7 +926,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "old"),
+                    summary_payload("completed", "old"),
                     session_id="same-session",
                     turn_id="turn-1",
                     now=100.0,
@@ -964,7 +967,7 @@ class QueueTests(unittest.TestCase):
             for index in range(3):
                 enqueue(
                     data_dir,
-                    Announcement("completed", str(index)),
+                    summary_payload("completed", str(index)),
                     session_id=f"session-{index}",
                     turn_id=f"turn-{index}",
                     now=100.0 + index / 10,
@@ -982,7 +985,7 @@ class QueueTests(unittest.TestCase):
             data_dir = Path(temporary)
             enqueue(
                 data_dir,
-                Announcement("blocked", "stale"),
+                summary_payload("blocked", "stale"),
                 session_id="stale-session",
                 turn_id="stale-turn",
                 now=100.0,
@@ -1050,7 +1053,7 @@ class QueueTests(unittest.TestCase):
                 self.assertTrue(
                     enqueue(
                         data_dir,
-                        Announcement("completed", "valid"),
+                        summary_payload("completed", "valid"),
                         session_id="valid-session",
                         turn_id="valid-turn",
                         now=100.0,
@@ -1127,7 +1130,7 @@ class QueueTests(unittest.TestCase):
                 self.assertTrue(
                     enqueue(
                         data_dir,
-                        Announcement("completed", "legitimate"),
+                        summary_payload("completed", "legitimate"),
                         session_id=session_id,
                         turn_id=turn_id,
                         now=100.0,
@@ -1262,7 +1265,7 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "ready-after-lock"),
+                    summary_payload("completed", "ready-after-lock"),
                     session_id="poll-session",
                     turn_id="poll-turn",
                 )

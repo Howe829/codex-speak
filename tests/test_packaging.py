@@ -42,16 +42,29 @@ class PackagingTests(unittest.TestCase):
                 "defaultPrompt",
             },
         )
-        production_text = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in (
-                ROOT / ".codex-plugin" / "plugin.json",
-                ROOT / "hooks" / "hooks.json",
-                ROOT / "hooks" / "session_start.py",
-                ROOT / "hooks" / "stop.py",
+
+    def test_shipped_runtime_sources_contain_no_legacy_protocol_marker(self) -> None:
+        source_roots = (
+            ROOT / "codex_speak",
+            ROOT / "hooks",
+            ROOT / "menu-bar" / "Sources",
+        )
+        source_paths = [ROOT / ".codex-plugin" / "plugin.json"]
+        source_paths.extend(
+            sorted(
+                path
+                for source_root in source_roots
+                for path in source_root.rglob("*")
+                if path.is_file() and path.suffix in {".json", ".py", ".swift"}
             )
         )
-        self.assertNotIn("codex-voice-notifier", production_text)
+        self.assertTrue(source_paths)
+        for path in source_paths:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotIn(
+                    "codex-voice-notifier:v1",
+                    path.read_text(encoding="utf-8"),
+                )
 
     def test_embedded_helper_has_exact_metadata_and_is_executable(self) -> None:
         self.assertTrue(os.access(EXECUTABLE, os.X_OK), EXECUTABLE)

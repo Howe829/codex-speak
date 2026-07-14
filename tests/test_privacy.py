@@ -8,10 +8,13 @@ import unittest
 
 from hooks.stop import handle_event
 from codex_speak.bridge import run_bridge
-from codex_speak.protocol import Announcement
 from codex_speak.queue import enqueue
-from codex_speak.render import normalize_full_text, segment_text
+from codex_speak.render import SpeechPayload, normalize_full_text, segment_text
 from codex_speak.worker import run_worker
+
+
+def summary_payload(status: str, text: str) -> SpeechPayload:
+    return SpeechPayload("summary", status, (text,))
 
 
 class PrivacyAndPackagingTests(unittest.TestCase):
@@ -282,7 +285,7 @@ class PrivacyAndPackagingTests(unittest.TestCase):
             say_path.chmod(0o700)
             enqueue(
                 data_dir,
-                Announcement("completed", secret),
+                summary_payload("completed", secret),
                 session_id="private-session",
                 turn_id="private-turn",
                 now=100.0,

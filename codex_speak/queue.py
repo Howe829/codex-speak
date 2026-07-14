@@ -17,7 +17,7 @@ import time
 from typing import Final, Iterator, Sequence
 
 from .diagnostics import record
-from .protocol import ALL_STATUSES, Announcement
+from .protocol import ALL_STATUSES
 from .render import MAX_SEGMENT_CHARS, SpeechPayload
 
 
@@ -391,7 +391,7 @@ def _discard_expired(data_dir: Path, path: Path, event: QueueEvent) -> None:
 
 def enqueue(
     data_dir: Path,
-    payload: SpeechPayload | Announcement,
+    payload: SpeechPayload,
     *,
     session_id: str,
     turn_id: str,
@@ -404,8 +404,6 @@ def enqueue(
     spool = _prepare(data_dir)
     event_id = make_event_id(session_id, turn_id)
     session_key = _session_key(session_id)
-    if isinstance(payload, Announcement):
-        payload = SpeechPayload("summary", payload.status, (payload.speech_text,))
     if not (
         payload.mode in {"summary", "full"}
         and payload.status in ALL_STATUSES

@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from unittest.mock import ANY, patch
 
-from codex_speak.protocol import Announcement
 from codex_speak.queue import enqueue, try_worker_lock
 from codex_speak.render import SpeechPayload
 from codex_speak.worker import run_worker, spawn_worker
@@ -15,6 +14,10 @@ from codex_speak.worker import run_worker, spawn_worker
 
 CLOCK_A = "11111111-1111-1111-1111-111111111111"
 CLOCK_B = "22222222-2222-2222-2222-222222222222"
+
+
+def summary_payload(status: str, text: str) -> SpeechPayload:
+    return SpeechPayload("summary", status, (text,))
 
 
 class WorkerTests(unittest.TestCase):
@@ -37,7 +40,7 @@ class WorkerTests(unittest.TestCase):
             for index, speech in enumerate(speeches):
                 enqueue(
                     data_dir,
-                    Announcement("completed", speech),
+                    summary_payload("completed", speech),
                     session_id=f"session-{index}",
                     turn_id=f"turn-{index}",
                     now=100.0 + index / 10,
@@ -177,7 +180,7 @@ class WorkerTests(unittest.TestCase):
                 self.assertTrue(
                     enqueue(
                         data_dir,
-                        Announcement("completed", "fresh event"),
+                        summary_payload("completed", "fresh event"),
                         session_id="session",
                         turn_id="turn",
                         clock_id=CLOCK_A,
@@ -212,7 +215,7 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(
                 enqueue(
                     data_dir,
-                    Announcement("completed", "stale from prior boot"),
+                    summary_payload("completed", "stale from prior boot"),
                     session_id="session",
                     turn_id="turn",
                     now=100.0,
@@ -239,7 +242,7 @@ class WorkerTests(unittest.TestCase):
             say_path = self._fake_executable(Path(temporary))
             enqueue(
                 data_dir,
-                Announcement("completed", "expired event"),
+                summary_payload("completed", "expired event"),
                 session_id="session",
                 turn_id="turn",
                 now=100.0,
@@ -267,7 +270,7 @@ class WorkerTests(unittest.TestCase):
             say_path = self._fake_executable(Path(temporary))
             enqueue(
                 data_dir,
-                Announcement("completed", "ready after wait"),
+                summary_payload("completed", "ready after wait"),
                 session_id="session",
                 turn_id="turn",
                 now=100.0,
@@ -321,7 +324,7 @@ class WorkerTests(unittest.TestCase):
             for index, speech in enumerate(("TOP_SECRET_ONE", "TOP_SECRET_TWO")):
                 enqueue(
                     data_dir,
-                    Announcement("completed", speech),
+                    summary_payload("completed", speech),
                     session_id=f"s-{index}",
                     turn_id=f"t-{index}",
                     now=100.0 + index / 10,
@@ -357,7 +360,7 @@ class WorkerTests(unittest.TestCase):
             for index in range(2):
                 enqueue(
                     data_dir,
-                    Announcement("blocked", f"message-{index}"),
+                    summary_payload("blocked", f"message-{index}"),
                     session_id=f"s-{index}",
                     turn_id=f"t-{index}",
                     now=100.0 + index / 10,
@@ -397,7 +400,7 @@ class WorkerTests(unittest.TestCase):
             data_dir = Path(temporary) / "data"
             enqueue(
                 data_dir,
-                Announcement("blocked", "cannot speak"),
+                summary_payload("blocked", "cannot speak"),
                 session_id="s",
                 turn_id="t",
                 now=100.0,
@@ -426,7 +429,7 @@ class WorkerTests(unittest.TestCase):
             say_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
             enqueue(
                 data_dir,
-                Announcement("action_required", "PRIVATE_SPEECH"),
+                summary_payload("action_required", "PRIVATE_SPEECH"),
                 session_id="s",
                 turn_id="t",
                 now=100.0,
@@ -454,7 +457,7 @@ class WorkerTests(unittest.TestCase):
             say_path = self._fake_executable(Path(temporary))
             enqueue(
                 data_dir,
-                Announcement("completed", "keep queued"),
+                summary_payload("completed", "keep queued"),
                 session_id="s",
                 turn_id="t",
                 now=100.0,
