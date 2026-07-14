@@ -12,12 +12,15 @@ if str(DEFAULT_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(DEFAULT_PLUGIN_ROOT))
 
 from codex_speak.diagnostics import record
-from codex_speak.protocol import extract_announcement
-from codex_speak.queue import discard_event, enqueue, make_event_id
-from codex_speak.worker import spawn_worker
+from codex_speak.helper import ensure_consumer
+from codex_speak.protocol import extract_response
+from codex_speak.queue import discard_event, enqueue, make_event_id, try_worker_lock
+from codex_speak.render import render_speech
+from codex_speak.settings import load_mode
 
 
-WorkerStarter = Callable[[Path, Path], None]
+ModeLoader = Callable[[Path], str]
+ConsumerStarter = Callable[[Path, Path], object]
 INVALID_EVENT_ID = make_event_id("invalid-session-id", "invalid-turn-id")
 
 
@@ -37,7 +40,8 @@ def handle_event(
     plugin_root: Path,
     data_dir: Path,
     platform_name: str,
-    start_worker: WorkerStarter,
+    mode_loader: ModeLoader,
+    start_consumer: ConsumerStarter,
 ) -> bool:
     session_id = payload.get("session_id")
     turn_id = payload.get("turn_id")
@@ -50,6 +54,7 @@ def handle_event(
             event_id=safe_event_id,
             status="unknown",
             result="discarded",
+            mode="unknown",
             error_code="unsupported_platform",
         )
         return False
@@ -60,28 +65,43 @@ def handle_event(
             event_id=INVALID_EVENT_ID,
             status="unknown",
             result="discarded",
+            mode="unknown",
             error_code="invalid_hook_input",
         )
         return False
 
-    announcement = extract_announcement(message if isinstance(message, str) else None)
-    if announcement is None:
-        if isinstance(message, str) and "codex-voice-notifier:v1" in message:
-            record(
-                data_dir,
-                event_id=safe_event_id,
-                status="unknown",
-                result="discarded",
-                error_code="invalid_marker",
-            )
+    parsed = extract_response(message if isinstance(message, str) else None)
+    if parsed is None:
+        record(
+            data_dir,
+            event_id=safe_event_id,
+            status="unknown",
+            result="discarded",
+            mode="unknown",
+            error_code="invalid_marker",
+        )
         return False
-    if announcement.status == "silent":
+
+    try:
+        mode = mode_loader(data_dir)
+        speech = render_speech(parsed, mode)
+    except (OSError, TypeError, ValueError):
+        record(
+            data_dir,
+            event_id=safe_event_id,
+            status=parsed.status,
+            result="failed",
+            mode="unknown",
+            error_code="invalid_settings",
+        )
+        return False
+    if speech is None:
         return False
 
     try:
         queued = enqueue(
             data_dir,
-            announcement,
+            speech,
             session_id=session_id,
             turn_id=turn_id,
         )
@@ -93,8 +113,9 @@ def handle_event(
         record(
             data_dir,
             event_id=safe_event_id,
-            status=announcement.status,
+            status=parsed.status,
             result="failed",
+            mode=mode,
             error_code="queue_failed",
         )
         return False
@@ -102,8 +123,14 @@ def handle_event(
         return False
 
     try:
-        start_worker(plugin_root, data_dir)
-    except Exception:
+        start_consumer(plugin_root, data_dir)
+    except BaseException:
+        try:
+            with try_worker_lock(data_dir) as no_active_consumer:
+                if not no_active_consumer:
+                    return True
+        except BaseException:
+            pass
         try:
             discard_event(data_dir, safe_event_id)
         except (OSError, TypeError, ValueError):
@@ -111,9 +138,11 @@ def handle_event(
         record(
             data_dir,
             event_id=safe_event_id,
-            status=announcement.status,
+            status=parsed.status,
             result="failed",
-            error_code="worker_start_failed",
+            mode=mode,
+            segment_count=len(speech.segments),
+            error_code="helper_start_failed",
         )
     return True
 
@@ -127,6 +156,7 @@ def _record_invalid_hook_input(data_dir: Path | None) -> None:
             event_id=INVALID_EVENT_ID,
             status="unknown",
             result="discarded",
+            mode="unknown",
             error_code="invalid_hook_input",
         )
     except BaseException:
@@ -147,7 +177,8 @@ def main() -> int:
             plugin_root=plugin_root,
             data_dir=data_dir,
             platform_name=sys.platform,
-            start_worker=spawn_worker,
+            mode_loader=load_mode,
+            start_consumer=ensure_consumer,
         )
     except BaseException:
         _record_invalid_hook_input(data_dir)

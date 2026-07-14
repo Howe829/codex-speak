@@ -7,10 +7,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from hooks.session_start import build_output
+from hooks.session_start import build_output, ensure_started
 from hooks.stop import DEFAULT_PLUGIN_ROOT, handle_event, main
-from codex_speak.queue import make_event_id, poll_next
-
+from codex_speak.queue import make_event_id, poll_next, try_worker_lock
 
 def assistant_message(status: str, speech_text: str) -> str:
     payload = json.dumps(
@@ -18,7 +17,7 @@ def assistant_message(status: str, speech_text: str) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    return f"Visible final answer\n\n<!-- codex-voice-notifier:v1 {payload} -->"
+    return f"Visible final answer\n\n<!-- codex-speak:v1 {payload} -->"
 
 
 def read_diagnostics(data_dir: Path) -> list[dict[str, object]]:
@@ -36,7 +35,10 @@ class HookTests(unittest.TestCase):
         specific = output["hookSpecificOutput"]
         self.assertEqual(specific["hookEventName"], "SessionStart")
         context = specific["additionalContext"]
-        self.assertIn("codex-voice-notifier:v1", context)
+        self.assertIn("codex-speak:v1", context)
+        self.assertNotIn("codex-voice-notifier:v1", context)
+        self.assertNotIn("Stop Current Speech", context)
+        self.assertNotIn("Clear Pending Speeches", context)
         self.assertIn("completed", context)
         self.assertIn("blocked", context)
         self.assertIn("action_required", context)
@@ -77,7 +79,22 @@ class HookTests(unittest.TestCase):
             context,
         )
 
-    def test_stop_enqueues_important_event_and_starts_worker(self) -> None:
+    def test_session_start_best_effort_starts_consumer(self) -> None:
+        started = []
+        ensure_started(
+            Path("/plugin"),
+            Path("/data"),
+            start_consumer=lambda root, data: started.append((root, data)),
+        )
+        self.assertEqual(started, [(Path("/plugin"), Path("/data"))])
+
+        ensure_started(
+            Path("/plugin"),
+            Path("/data"),
+            start_consumer=lambda *_: (_ for _ in ()).throw(OSError("private")),
+        )
+
+    def test_stop_summary_enqueues_important_event_and_starts_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
             started = []
@@ -91,14 +108,15 @@ class HookTests(unittest.TestCase):
                 plugin_root=Path(temporary),
                 data_dir=data_dir,
                 platform_name="darwin",
-                start_worker=lambda root, data: started.append((root, data)),
+                mode_loader=lambda _: "summary",
+                start_consumer=lambda root, data: started.append((root, data)),
             )
             self.assertTrue(queued)
             self.assertEqual(started, [(Path(temporary), data_dir)])
             result = poll_next(data_dir, now=time.monotonic() + 2.0)
             self.assertEqual(result.event.speech_text if result.event else None, "任务完成")
 
-    def test_silent_missing_marker_and_duplicate_do_not_start_worker(self) -> None:
+    def test_summary_silent_missing_marker_and_duplicate_do_not_start_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
             started = []
@@ -121,13 +139,43 @@ class HookTests(unittest.TestCase):
                 "plugin_root": Path(temporary),
                 "data_dir": data_dir,
                 "platform_name": "darwin",
-                "start_worker": lambda root, data: started.append((root, data)),
+                "mode_loader": lambda _: "summary",
+                "start_consumer": lambda root, data: started.append((root, data)),
             }
             self.assertFalse(handle_event(silent, **arguments))
             self.assertFalse(handle_event(missing, **arguments))
             self.assertTrue(handle_event(important, **arguments))
             self.assertFalse(handle_event(important, **arguments))
             self.assertEqual(len(started), 1)
+
+    def test_full_mode_enqueues_normalized_visible_body_even_when_silent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            started = []
+            payload = {
+                "session_id": "session",
+                "turn_id": "turn",
+                "last_assistant_message": (
+                    "# 标题\n\n正文含有 `secret()` 和 https://example.com\n\n"
+                    '<!-- codex-speak:v1 {"status":"silent","speech_text":""} -->'
+                ),
+            }
+            self.assertTrue(
+                handle_event(
+                    payload,
+                    plugin_root=Path(temporary),
+                    data_dir=data_dir,
+                    platform_name="darwin",
+                    mode_loader=lambda _: "full",
+                    start_consumer=lambda root, data: started.append((root, data)),
+                )
+            )
+            event = poll_next(data_dir, now=time.monotonic() + 2.0).event
+            self.assertIsNotNone(event)
+            self.assertEqual(event.mode, "full")
+            self.assertEqual(event.status, "silent")
+            self.assertEqual(event.segments, ("标题 正文含有 代码 和 链接",))
+            self.assertEqual(started, [(Path(temporary), data_dir)])
 
     def test_non_macos_is_best_effort_and_does_not_enqueue(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -141,7 +189,8 @@ class HookTests(unittest.TestCase):
                 plugin_root=Path(temporary),
                 data_dir=data_dir,
                 platform_name="linux",
-                start_worker=lambda root, data: self.fail("worker must not start"),
+                mode_loader=lambda _: "summary",
+                start_consumer=lambda root, data: self.fail("consumer must not start"),
             )
             self.assertFalse(queued)
             diagnostics = read_diagnostics(data_dir)
@@ -171,7 +220,8 @@ class HookTests(unittest.TestCase):
                             plugin_root=Path(temporary),
                             data_dir=data_dir,
                             platform_name="darwin",
-                            start_worker=lambda root, data: started.append((root, data)),
+                            mode_loader=lambda _: "summary",
+                            start_consumer=lambda root, data: started.append((root, data)),
                         )
                     )
                     self.assertEqual(started, [])
@@ -204,7 +254,8 @@ class HookTests(unittest.TestCase):
                     plugin_root=Path(temporary),
                     data_dir=data_dir,
                     platform_name="darwin",
-                    start_worker=lambda *_: self.fail("worker must not start"),
+                    mode_loader=lambda _: "summary",
+                    start_consumer=lambda *_: self.fail("consumer must not start"),
                 )
             )
             diagnostics = read_diagnostics(data_dir)
@@ -225,14 +276,15 @@ class HookTests(unittest.TestCase):
                 plugin_root=Path(temporary),
                 data_dir=data_dir,
                 platform_name="darwin",
-                start_worker=lambda *_: (_ for _ in ()).throw(OSError("denied")),
+                mode_loader=lambda _: "summary",
+                start_consumer=lambda *_: (_ for _ in ()).throw(OSError("denied")),
             )
             self.assertTrue(queued)
             self.assertEqual(list((data_dir / "spool").glob("*.json")), [])
             diagnostics = read_diagnostics(data_dir)
             self.assertEqual(diagnostics[0]["status"], "action_required")
             self.assertEqual(diagnostics[0]["result"], "failed")
-            self.assertEqual(diagnostics[0]["error_code"], "worker_start_failed")
+            self.assertEqual(diagnostics[0]["error_code"], "helper_start_failed")
             self.assertNotIn("PRIVATE NEXT STEP", json.dumps(diagnostics))
             persisted = "".join(
                 path.read_text(encoding="utf-8", errors="ignore")
@@ -240,6 +292,40 @@ class HookTests(unittest.TestCase):
                 if path.is_file()
             )
             self.assertNotIn("PRIVATE NEXT STEP", persisted)
+
+    def test_start_failure_preserves_queue_when_consumer_lock_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            with try_worker_lock(data_dir) as acquired:
+                self.assertTrue(acquired)
+                self.assertTrue(
+                    handle_event(
+                        {
+                            "session_id": "session",
+                            "turn_id": "turn",
+                            "last_assistant_message": assistant_message(
+                                "completed", "ACTIVE CONSUMER SPEECH"
+                            ),
+                        },
+                        plugin_root=Path(temporary),
+                        data_dir=data_dir,
+                        platform_name="darwin",
+                        mode_loader=lambda _: "summary",
+                        start_consumer=lambda *_: (_ for _ in ()).throw(
+                            OSError("launch raced")
+                        ),
+                    )
+                )
+                self.assertEqual(
+                    len(list((data_dir / "spool").glob("*.json"))),
+                    1,
+                )
+            diagnostics_path = data_dir / "diagnostics.jsonl"
+            if diagnostics_path.exists():
+                self.assertNotIn(
+                    '"error_code":"helper_start_failed"',
+                    diagnostics_path.read_text(encoding="utf-8"),
+                )
 
     def test_runtime_worker_start_failure_is_isolated_and_removes_queued_speech(
         self,
@@ -262,7 +348,8 @@ class HookTests(unittest.TestCase):
                     plugin_root=Path(temporary),
                     data_dir=data_dir,
                     platform_name="darwin",
-                    start_worker=fail_to_start,
+                    mode_loader=lambda _: "summary",
+                    start_consumer=fail_to_start,
                 )
             except Exception as error:
                 self.fail(
@@ -274,7 +361,7 @@ class HookTests(unittest.TestCase):
             diagnostics = read_diagnostics(data_dir)
             self.assertEqual(diagnostics[0]["status"], "completed")
             self.assertEqual(diagnostics[0]["result"], "failed")
-            self.assertEqual(diagnostics[0]["error_code"], "worker_start_failed")
+            self.assertEqual(diagnostics[0]["error_code"], "helper_start_failed")
             self.assertNotIn("unexpected starter failure", json.dumps(diagnostics))
             self.assertNotIn("RUNTIME FAILURE SPEECH", json.dumps(diagnostics))
             persisted = "".join(
@@ -326,7 +413,7 @@ class HookTests(unittest.TestCase):
                 patch("hooks.stop.sys.stdin", io.StringIO(json.dumps(payload))),
                 patch("hooks.stop.sys.stdout", stdout),
                 patch(
-                    "hooks.stop.spawn_worker",
+                    "hooks.stop.ensure_consumer",
                     side_effect=lambda root, data: started.append((root, data)),
                 ),
                 patch("hooks.stop.sys.platform", "darwin"),

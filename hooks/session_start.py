@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import sys
 
 
+DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+if str(DEFAULT_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(DEFAULT_PLUGIN_ROOT))
+
+from codex_speak.helper import ensure_consumer
+
+
 PROTOCOL_CONTEXT = """
-Codex Voice Notifier is active. For every final response, append exactly one single-line HTML comment as the final non-whitespace content:
-<!-- codex-voice-notifier:v1 {"status":"STATUS","speech_text":"TEXT"} -->
+Codex Speak is active. For every final response, append exactly one single-line HTML comment as the final non-whitespace content:
+<!-- codex-speak:v1 {"status":"STATUS","speech_text":"TEXT"} -->
 
 STATUS must be exactly one of completed, blocked, action_required, or silent.
 - completed: a requested implementation, change, artifact, analysis, report, or other concrete task result was delivered.
@@ -29,7 +38,24 @@ def build_output() -> dict[str, object]:
     }
 
 
+def ensure_started(
+    plugin_root: Path,
+    data_dir: Path,
+    *,
+    start_consumer=ensure_consumer,
+) -> None:
+    try:
+        start_consumer(plugin_root, data_dir)
+    except BaseException:
+        pass
+
+
 def main() -> int:
+    root_value = os.environ.get("PLUGIN_ROOT")
+    plugin_root = Path(root_value) if root_value else DEFAULT_PLUGIN_ROOT
+    data_value = os.environ.get("PLUGIN_DATA")
+    if data_value:
+        ensure_started(plugin_root, Path(data_value))
     json.dump(build_output(), sys.stdout, ensure_ascii=False, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0

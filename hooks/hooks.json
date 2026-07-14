@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/session_start.py\"",
-            "statusMessage": "Loading voice notification rules"
+            "statusMessage": "Loading Codex Speak rules"
           }
         ]
       }

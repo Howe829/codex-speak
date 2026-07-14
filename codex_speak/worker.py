@@ -46,48 +46,43 @@ def run_worker(
                     event_id=event.event_id,
                     status=event.status,
                     result="discarded",
+                    mode=event.mode,
                     error_code="say_unavailable",
                 )
                 continue
 
             started = timer()
-            try:
-                completed = runner(
-                    [str(say_path)],
-                    input="\n".join(event.segments),
-                    text=True,
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                duration_ms = max(0, int((timer() - started) * 1000))
-                if completed.returncode == 0:
-                    record(
-                        data_dir,
-                        event_id=event.event_id,
-                        status=event.status,
-                        result="spoken",
-                        duration_ms=duration_ms,
+            completed_segments = 0
+            failed = False
+            for segment in event.segments:
+                try:
+                    completed = runner(
+                        [str(say_path)],
+                        input=segment,
+                        text=True,
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                     )
-                else:
-                    record(
-                        data_dir,
-                        event_id=event.event_id,
-                        status=event.status,
-                        result="failed",
-                        duration_ms=duration_ms,
-                        error_code="say_failed",
-                    )
-            except OSError:
-                duration_ms = max(0, int((timer() - started) * 1000))
-                record(
-                    data_dir,
-                    event_id=event.event_id,
-                    status=event.status,
-                    result="failed",
-                    duration_ms=duration_ms,
-                    error_code="say_failed",
-                )
+                except OSError:
+                    failed = True
+                    break
+                if completed.returncode != 0:
+                    failed = True
+                    break
+                completed_segments += 1
+
+            duration_ms = max(0, int((timer() - started) * 1000))
+            record(
+                data_dir,
+                event_id=event.event_id,
+                status=event.status,
+                result="failed" if failed else "spoken",
+                mode=event.mode,
+                segment_count=completed_segments,
+                duration_ms=duration_ms,
+                error_code="say_failed" if failed else None,
+            )
 
 
 def spawn_worker(plugin_root: Path, data_dir: Path) -> None:

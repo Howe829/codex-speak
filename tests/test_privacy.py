@@ -61,7 +61,7 @@ class PrivacyAndPackagingTests(unittest.TestCase):
                 "turn_id": "private-turn",
                 "last_assistant_message": (
                     assistant_secret
-                    + "\n\n<!-- codex-voice-notifier:v1 "
+                    + "\n\n<!-- codex-speak:v1 "
                     + json.dumps(
                         {"status": "completed", "speech_text": speech_secret},
                         separators=(",", ":"),
@@ -77,7 +77,8 @@ class PrivacyAndPackagingTests(unittest.TestCase):
                     plugin_root=root,
                     data_dir=data_dir,
                     platform_name="darwin",
-                    start_worker=run_queued_worker,
+                    mode_loader=lambda _: "summary",
+                    start_consumer=run_queued_worker,
                 )
             )
             self.assertEqual(captured, [([str(say_path)], speech_secret)])
@@ -128,13 +129,14 @@ class PrivacyAndPackagingTests(unittest.TestCase):
                     "turn_id": "turn",
                     "last_assistant_message": (
                         secret
-                        + '\n<!-- codex-voice-notifier:v1 {"status":"completed"} -->'
+                        + '\n<!-- codex-speak:v1 {"status":"completed"} -->'
                     ),
                 },
                 plugin_root=root,
                 data_dir=data_dir,
                 platform_name="darwin",
-                start_worker=lambda plugin_root, plugin_data: None,
+                mode_loader=lambda _: "summary",
+                start_consumer=lambda plugin_root, plugin_data: None,
             )
             diagnostics = (data_dir / "diagnostics.jsonl").read_text(
                 encoding="utf-8"

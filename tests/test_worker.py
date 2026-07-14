@@ -85,7 +85,7 @@ class WorkerTests(unittest.TestCase):
                 ],
             )
 
-    def test_temporarily_joins_segments_into_one_stdin_payload(self) -> None:
+    def test_speaks_each_segment_through_separate_stdin_playback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
             say_path = self._fake_executable(Path(temporary))
@@ -114,7 +114,57 @@ class WorkerTests(unittest.TestCase):
             )
 
             self.assertEqual(result, 0)
-            self.assertEqual(inputs, ["first\nsecond\nthird"])
+            self.assertEqual(inputs, ["first", "second", "third"])
+            diagnostic = json.loads(
+                (data_dir / "diagnostics.jsonl").read_text(encoding="utf-8")
+            )
+            self.assertEqual(diagnostic["mode"], "full")
+            self.assertEqual(diagnostic["segment_count"], 3)
+            self.assertEqual(diagnostic["result"], "spoken")
+
+    def test_stops_remaining_segments_on_first_failure_and_records_one_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            say_path = self._fake_executable(Path(temporary))
+            enqueue(
+                data_dir,
+                SpeechPayload("full", "completed", ("one", "two", "three")),
+                session_id="session",
+                turn_id="turn",
+                now=100.0,
+                clock_id=CLOCK_A,
+            )
+            inputs = []
+            return_codes = iter((0, 1))
+
+            def fake_run(arguments, **kwargs):
+                inputs.append(kwargs["input"])
+                return subprocess.CompletedProcess(arguments, next(return_codes))
+
+            result = run_worker(
+                data_dir,
+                say_path=say_path,
+                run_command=fake_run,
+                sleep=lambda _: None,
+                clock=lambda: 101.0,
+                monotonic=iter((10.0, 10.025)).__next__,
+                clock_id=CLOCK_A,
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(inputs, ["one", "two"])
+            diagnostics = [
+                json.loads(line)
+                for line in (data_dir / "diagnostics.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(diagnostics[0]["result"], "failed")
+            self.assertEqual(diagnostics[0]["error_code"], "say_failed")
+            self.assertEqual(diagnostics[0]["mode"], "full")
+            self.assertEqual(diagnostics[0]["segment_count"], 1)
+            self.assertEqual(diagnostics[0]["duration_ms"], 25)
 
     def test_fresh_event_is_spoken_across_different_wall_clock_domains(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
