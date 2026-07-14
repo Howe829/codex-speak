@@ -1,0 +1,18 @@
+{
+  "name": "codex-speak",
+  "version": "0.1.0",
+  "description": "Codex Speak plugin",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Speak",
+    "shortDescription": "Use Codex Speak in Codex.",
+    "longDescription": "Codex Speak adds a local Codex plugin scaffold.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Codex Speak."
+  }
+}
