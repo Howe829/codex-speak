@@ -7,6 +7,8 @@ from pathlib import Path
 import tempfile
 from typing import Final, Sequence
 
+from .diagnostics import record
+
 
 _VERSION: Final[int] = 1
 _MODES: Final[frozenset[str]] = frozenset({"summary", "full"})
@@ -73,12 +75,25 @@ def load_mode(data_dir: Path) -> str:
     path = data_dir / "settings.json"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
+        existed = True
+    except FileNotFoundError:
+        value = None
+        existed = False
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         value = None
+        existed = True
     if _is_settings(value):
         os.chmod(data_dir, 0o700)
         os.chmod(path, 0o600)
         return value["mode"]
+    if existed:
+        record(
+            data_dir,
+            event_id="0" * 24,
+            status="unknown",
+            result="discarded",
+            error_code="invalid_settings",
+        )
     return save_mode(data_dir, "summary")
 
 

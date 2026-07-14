@@ -576,6 +576,10 @@ class QueueTests(unittest.TestCase):
             self.assertIsNone(
                 poll_next(data_dir, now=100.2, clock_id=CLOCK_B).event
             )
+            diagnostics = (data_dir / "diagnostics.jsonl").read_text(encoding="utf-8")
+            self.assertEqual(diagnostics.count('"error_code":"boot_mismatch"'), 2)
+            self.assertNotIn("stale-0", diagnostics)
+            self.assertNotIn("stale-1", diagnostics)
             for index in range(2):
                 self.assertTrue(
                     enqueue(
@@ -985,7 +989,7 @@ class QueueTests(unittest.TestCase):
             data_dir = Path(temporary)
             enqueue(
                 data_dir,
-                summary_payload("blocked", "stale"),
+                summary_payload("blocked", "PRIVATE_STALE_SPEECH_91827"),
                 session_id="stale-session",
                 turn_id="stale-turn",
                 now=100.0,
@@ -1003,9 +1007,9 @@ class QueueTests(unittest.TestCase):
             self.assertIn('"status":"blocked"', diagnostics)
             self.assertIn('"status":"unknown"', diagnostics)
             self.assertIn('"result":"discarded"', diagnostics)
-            self.assertIn('"error_code":"expired"', diagnostics)
-            self.assertIn('"error_code":"queue_corrupt"', diagnostics)
-            self.assertNotIn("stale", diagnostics)
+            self.assertIn('"error_code":"stale_event"', diagnostics)
+            self.assertIn('"error_code":"invalid_event"', diagnostics)
+            self.assertNotIn("PRIVATE_STALE_SPEECH_91827", diagnostics)
 
     def test_structured_event_with_invalid_metadata_is_queue_corrupt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1037,7 +1041,7 @@ class QueueTests(unittest.TestCase):
             self.assertRegex(entry["event_id"], r"\A[0-9a-f]{24}\Z")
             self.assertEqual(entry["status"], "unknown")
             self.assertEqual(entry["result"], "discarded")
-            self.assertEqual(entry["error_code"], "queue_corrupt")
+            self.assertEqual(entry["error_code"], "invalid_event")
             diagnostics = json.dumps(entry)
             self.assertNotIn("private-status", diagnostics)
             self.assertNotIn("sensitive speech", diagnostics)
@@ -1091,13 +1095,13 @@ class QueueTests(unittest.TestCase):
                 ).read_text(encoding="utf-8")
                 self.assertIn('"status":"unknown"', diagnostics)
                 self.assertIn('"result":"discarded"', diagnostics)
-                self.assertIn('"error_code":"queue_corrupt"', diagnostics)
+                self.assertIn('"error_code":"invalid_event"', diagnostics)
                 self.assertNotIn("invalid-time", diagnostics)
 
     def test_enqueue_discards_temporally_invalid_matching_spool_events(self) -> None:
         cases = {
-            "far-future": (10_000.0, 10_001.0, "queue_corrupt"),
-            "expired": (-201.0, -200.0, "expired"),
+            "far-future": (10_000.0, 10_001.0, "invalid_event"),
+            "expired": (-201.0, -200.0, "stale_event"),
         }
         for name, (created_at, not_before, error_code) in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:

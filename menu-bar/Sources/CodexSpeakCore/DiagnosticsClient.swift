@@ -26,20 +26,37 @@ public struct DiagnosticsClient: Sendable {
     }
 
     public func record(event: SpeechEvent, result: PlaybackResult) throws {
+        try run(arguments: [
+            "--event-id", event.eventID,
+            "--status", event.status,
+            "--result", result.outcome.rawValue,
+            "--mode", event.mode.rawValue,
+            "--segment-count", String(result.completedSegmentCount),
+            "--duration-ms", String(result.durationMilliseconds),
+            "--error-code", result.errorCode?.rawValue ?? "NONE",
+        ])
+    }
+
+    public func recordControlFailure(_ errorCode: ControlErrorCode) throws {
+        try run(arguments: [
+            "--event-id", "000000000000000000000000",
+            "--status", "unknown",
+            "--result", "failed",
+            "--mode", "unknown",
+            "--segment-count", "0",
+            "--duration-ms", "0",
+            "--error-code", errorCode.rawValue,
+        ])
+    }
+
+    private func run(arguments: [String]) throws {
         let request = CommandRequest(
             executableURL: pythonExecutableURL,
             arguments: [
                 "-B", "-m", "codex_speak.diagnostics",
                 "--data-dir", dataDirectory.path,
                 "record",
-                "--event-id", event.eventID,
-                "--status", event.status,
-                "--result", result.outcome.rawValue,
-                "--mode", event.mode.rawValue,
-                "--segment-count", String(result.completedSegmentCount),
-                "--duration-ms", String(result.durationMilliseconds),
-                "--error-code", result.errorCode?.rawValue ?? "NONE",
-            ],
+            ] + arguments,
             currentDirectoryURL: pluginRoot
         )
         let commandResult = try runner.run(request)
@@ -48,4 +65,8 @@ public struct DiagnosticsClient: Sendable {
             throw CodexSpeakError.commandFailed
         }
     }
+}
+
+public enum ControlErrorCode: String, Sendable {
+    case queueClearFailed = "queue_clear_failed"
 }

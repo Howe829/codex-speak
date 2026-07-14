@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codex_speak.queue import enqueue, make_event_id, try_worker_lock
+from codex_speak.queue import clear_pending, enqueue, make_event_id, try_worker_lock
 from codex_speak.render import SpeechPayload
 
 
@@ -22,13 +22,29 @@ class InspectingOutput(io.StringIO):
         super().__init__()
         self.data_dir = data_dir
         self.event_was_claimed = False
+        self.remaining_after_first_event = None
+        self.event_flushed = threading.Event()
 
     def flush(self) -> None:
         lines = self.getvalue().splitlines()
         if lines and json.loads(lines[-1]).get("type") == "event":
-            self.event_was_claimed = not list(
-                (self.data_dir / "spool").glob("*.json")
-            )
+            remaining = list((self.data_dir / "spool").glob("*.json"))
+            self.event_was_claimed = len(remaining) == 0
+            if self.remaining_after_first_event is None:
+                self.remaining_after_first_event = len(remaining)
+            self.event_flushed.set()
+
+
+class ControlledAckInput:
+    def __init__(self, acknowledgement: str) -> None:
+        self.acknowledgement = acknowledgement
+        self.waiting = threading.Event()
+        self.release = threading.Event()
+
+    def readline(self, _limit: int) -> str:
+        self.waiting.set()
+        self.release.wait(timeout=5)
+        return self.acknowledgement
 
 
 class BridgeTests(unittest.TestCase):
@@ -65,6 +81,9 @@ class BridgeTests(unittest.TestCase):
                     sleep=lambda _: None,
                     clock=lambda: 101.0,
                     clock_id=CLOCK,
+                    input=io.StringIO(
+                        json.dumps({"type": "ack", "event_id": make_event_id("session", "turn")}) + "\n"
+                    ),
                     stop_requested=lambda: len(output.getvalue().splitlines()) >= 2,
                 ),
                 0,
@@ -83,6 +102,89 @@ class BridgeTests(unittest.TestCase):
                     },
                 ],
             )
+
+    def test_bridge_waits_for_ack_before_claiming_next_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            for index in range(2):
+                enqueue(
+                    data_dir,
+                    SpeechPayload("full", "silent", (f"event {index}",)),
+                    session_id=f"session-{index}",
+                    turn_id=f"turn-{index}",
+                    now=100.0 + index / 10,
+                    clock_id=CLOCK,
+                )
+            ids = [make_event_id(f"session-{index}", f"turn-{index}") for index in range(2)]
+            output = InspectingOutput(data_dir)
+            acknowledgements = "".join(
+                json.dumps({"type": "ack", "event_id": event_id}) + "\n"
+                for event_id in ids
+            )
+
+            self.assertEqual(
+                self._bridge()(
+                    data_dir,
+                    output=output,
+                    input=io.StringIO(acknowledgements),
+                    sleep=lambda _: None,
+                    clock=lambda: 102.0,
+                    clock_id=CLOCK,
+                    stop_requested=lambda: len(output.getvalue().splitlines()) >= 3,
+                ),
+                0,
+            )
+
+            self.assertEqual(output.remaining_after_first_event, 1)
+            self.assertTrue(output.event_was_claimed)
+            self.assertEqual(
+                [line["event_id"] for line in map(json.loads, output.getvalue().splitlines()) if line["type"] == "event"],
+                ids,
+            )
+
+    def test_clear_pending_removes_second_event_while_bridge_awaits_first_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            ids = []
+            for index in range(2):
+                enqueue(
+                    data_dir,
+                    SpeechPayload("full", "silent", (f"event {index}",)),
+                    session_id=f"clear-session-{index}",
+                    turn_id=f"clear-turn-{index}",
+                    now=100.0 + index / 10,
+                    clock_id=CLOCK,
+                )
+                ids.append(make_event_id(f"clear-session-{index}", f"clear-turn-{index}"))
+            output = InspectingOutput(data_dir)
+            controlled = ControlledAckInput(
+                json.dumps({"type": "ack", "event_id": ids[0]}) + "\n"
+            )
+            thread = threading.Thread(
+                target=self._bridge(),
+                kwargs={
+                    "data_dir": data_dir,
+                    "output": output,
+                    "input": controlled,
+                    "sleep": lambda _: None,
+                    "clock": lambda: 102.0,
+                    "clock_id": CLOCK,
+                    "stop_requested": lambda: len(output.getvalue().splitlines()) >= 2,
+                },
+            )
+            thread.start()
+            self.assertTrue(controlled.waiting.wait(timeout=5))
+
+            self.assertEqual(clear_pending(data_dir), 1)
+            controlled.release.set()
+            thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            events = [
+                line for line in map(json.loads, output.getvalue().splitlines())
+                if line["type"] == "event"
+            ]
+            self.assertEqual([line["event_id"] for line in events], [ids[0]])
 
     def test_lock_contender_prints_only_busy_and_claims_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

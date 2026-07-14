@@ -21,12 +21,14 @@ def run_bridge(
     data_dir: Path,
     *,
     output: TextIO | None = None,
+    input: TextIO | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     clock_id: str | None = None,
     stop_requested: Callable[[], bool] | None = None,
 ) -> int:
     writer = output or sys.stdout
+    reader = input or sys.stdin
     should_stop = stop_requested or (lambda: False)
     with try_worker_lock(data_dir) as acquired:
         if not acquired:
@@ -47,6 +49,20 @@ def run_bridge(
                         "segments": list(event.segments),
                     },
                 )
+                acknowledgement = reader.readline(1025)
+                if len(acknowledgement) > 1024 or not acknowledgement.endswith("\n"):
+                    return 0
+                try:
+                    ack = json.loads(acknowledgement)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    return 0
+                if not (
+                    isinstance(ack, dict)
+                    and set(ack) == {"type", "event_id"}
+                    and ack.get("type") == "ack"
+                    and ack.get("event_id") == event.event_id
+                ):
+                    return 0
                 continue
             wait_seconds = result.wait_seconds
             sleep(0.1 if wait_seconds is None else max(0.01, min(wait_seconds, 1.0)))

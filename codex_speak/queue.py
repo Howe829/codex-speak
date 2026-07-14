@@ -366,7 +366,7 @@ def _superseded_paths(events: list[tuple[Path, QueueEvent]]) -> set[Path]:
     return superseded
 
 
-def _discard_corrupt(data_dir: Path, path: Path) -> None:
+def _discard_invalid(data_dir: Path, path: Path, error_code: str = "invalid_event") -> None:
     corrupt_id = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:24]
     path.unlink(missing_ok=True)
     record(
@@ -374,18 +374,18 @@ def _discard_corrupt(data_dir: Path, path: Path) -> None:
         event_id=corrupt_id,
         status="unknown",
         result="discarded",
-        error_code="queue_corrupt",
+        error_code=error_code,
     )
 
 
-def _discard_expired(data_dir: Path, path: Path, event: QueueEvent) -> None:
+def _discard_stale(data_dir: Path, path: Path, event: QueueEvent) -> None:
     path.unlink(missing_ok=True)
     record(
         data_dir,
         event_id=event.event_id,
         status=event.status,
         result="discarded",
-        error_code="expired",
+        error_code="stale_event",
     )
 
 
@@ -436,16 +436,16 @@ def enqueue(
             try:
                 existing = _read_event(path)
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path)
                 continue
             if existing.clock_id != current_clock_id:
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path, "boot_mismatch")
                 continue
             if existing.created_at > timestamp + SETTLE_SECONDS:
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path)
                 continue
             if timestamp - existing.created_at > EXPIRY_SECONDS:
-                _discard_expired(data_dir, path, existing)
+                _discard_stale(data_dir, path, existing)
                 continue
             spool_events.append((path, existing))
 
@@ -517,7 +517,7 @@ def poll_next(
             return QueuePoll(event=None, wait_seconds=0.05)
         if current_clock_id is None:
             for path in sorted(spool.glob("*.json")):
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path, "boot_mismatch")
             return QueuePoll(event=None, wait_seconds=None)
         timestamp = time.monotonic() if now is None else float(now)
         dedupe, dedupe_changed = _load_dedupe(
@@ -535,19 +535,19 @@ def poll_next(
             try:
                 event = _read_event(path)
             except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path)
                 continue
 
             if event.clock_id != current_clock_id:
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path, "boot_mismatch")
                 continue
 
             if event.created_at > timestamp + SETTLE_SECONDS:
-                _discard_corrupt(data_dir, path)
+                _discard_invalid(data_dir, path)
                 continue
 
             if timestamp - event.created_at > EXPIRY_SECONDS:
-                _discard_expired(data_dir, path, event)
+                _discard_stale(data_dir, path, event)
                 continue
 
             events.append((path, event))

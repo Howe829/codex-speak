@@ -62,9 +62,14 @@ class RenderTests(unittest.TestCase):
         self.assertIn("进度", normalized)
         self.assertIn("A ✅", normalized)
 
+    def test_fenced_code_and_image_alt_use_exact_spoken_placeholders(self) -> None:
+        body = "![订单截图](/private/order.png)\n```python\nsecret = 1\n```"
+        self.assertEqual(normalize_full_text(body), "订单截图 图片 代码块")
+        self.assertEqual(normalize_full_text("![](/private/empty.png)"), "图片")
+
     def test_normalizes_four_backtick_fence(self) -> None:
         body = "前文\n````python\nx = 1\n````\n后文"
-        self.assertEqual(normalize_full_text(body), "前文 代码 后文")
+        self.assertEqual(normalize_full_text(body), "前文 代码块 后文")
 
     def test_normalizes_fence_closed_by_longer_matching_delimiter(self) -> None:
         cases = (
@@ -73,7 +78,7 @@ class RenderTests(unittest.TestCase):
         )
         for body in cases:
             with self.subTest(body=body):
-                self.assertEqual(normalize_full_text(body), "前文 代码 后文")
+                self.assertEqual(normalize_full_text(body), "前文 代码块 后文")
 
     def test_does_not_match_mismatched_fence_delimiters(self) -> None:
         body = "前文\n```python\nx = 1\n~~~\n后文"

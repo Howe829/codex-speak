@@ -114,7 +114,7 @@ public actor BridgeProcess {
         self.sleep = sleep
     }
 
-    public func start(onMessage: @escaping @Sendable (BridgeMessage) -> Void) async throws {
+    public func start(onMessage: @escaping @Sendable (BridgeMessage) async -> Void) async throws {
         guard lifecycleID == nil else { return }
         let lifecycleIdentity = UUID()
         lifecycleID = lifecycleIdentity
@@ -136,7 +136,6 @@ public actor BridgeProcess {
             let process = try launcher.launch(request)
             let identity = UUID()
             active = (identity, process)
-            try? standardInput.fileHandleForWriting.close()
             let reader = PipeReader(standardOutput)
             var buffer = Data()
             var sawBusy = false
@@ -151,7 +150,14 @@ public actor BridgeProcess {
                         buffer.removeSubrange(...newline)
                         let message = try BridgeMessage.decode(data: lineData)
                         if message == .busy { sawBusy = true }
-                        onMessage(message)
+                        await onMessage(message)
+                        if case let .event(event) = message {
+                            let acknowledgement = try JSONSerialization.data(withJSONObject: [
+                                "type": "ack",
+                                "event_id": event.eventID,
+                            ]) + Data([0x0A])
+                            try standardInput.fileHandleForWriting.write(contentsOf: acknowledgement)
+                        }
                     }
                 }
                 guard buffer.isEmpty else { throw CodexSpeakError.invalidBridgeMessage }
@@ -162,6 +168,7 @@ public actor BridgeProcess {
                 throw error
             }
             _ = await process.waitUntilExit()
+            try? standardInput.fileHandleForWriting.close()
             if active?.id == identity { active = nil }
             if sawBusy && !stopping {
                 await sleep(1_000_000_000)

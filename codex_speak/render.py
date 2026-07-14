@@ -14,7 +14,7 @@ MAX_SEGMENT_CHARS: Final[int] = 600
 _FENCE_OPEN_RE = re.compile(
     r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*(?:\r?\n|\Z)"
 )
-_IMAGE_RE = re.compile(r"!\[[^\]\r\n]*\]\([^\)\r\n]*\)")
+_IMAGE_RE = re.compile(r"!\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _INLINE_CODE_RE = re.compile(
     r"(?<!`)(?P<ticks>`+)(?!`)[^\r\n]*?(?<!`)(?P=ticks)(?!`)"
@@ -66,7 +66,7 @@ def _replace_fenced_code(value: str) -> str:
         closing = closing_re.search(value, opening.end())
         if closing is None:
             break
-        parts.extend((value[cursor : opening.start()], "代码"))
+        parts.extend((value[cursor : opening.start()], "代码块"))
         cursor = closing.end()
     parts.append(value[cursor:])
     return "".join(parts)
@@ -75,7 +75,7 @@ def _replace_fenced_code(value: str) -> str:
 def normalize_full_text(value: str) -> str:
     text = _remove_unicode_controls(value)
     text = _replace_fenced_code(text)
-    text = _IMAGE_RE.sub("图片", text)
+    text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
     text = _INLINE_CODE_RE.sub("代码", text)
     text = _URL_RE.sub("链接", text)

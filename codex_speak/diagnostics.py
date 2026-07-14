@@ -23,8 +23,6 @@ _ERROR_CODES: Final[frozenset[str]] = frozenset(
         "say_unavailable",
         "invalid_hook_input",
         "invalid_marker",
-        "queue_corrupt",
-        "expired",
         "say_failed",
         "queue_failed",
         "worker_start_failed",

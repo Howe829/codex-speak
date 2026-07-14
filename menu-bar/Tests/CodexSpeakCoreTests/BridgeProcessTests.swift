@@ -111,6 +111,43 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testBridgeAcknowledgesEachEventOnlyAfterAsyncHandlerCompletes() async throws {
+        let firstID = "000000000000000000000001"
+        let secondID = "000000000000000000000002"
+        let launcher = ScriptedProcessLauncher(lines: [[
+            #"{"type":"ready"}"#,
+            #"{"type":"event","event_id":"\#(firstID)","mode":"full","status":"completed","segments":["first"]}"#,
+            #"{"type":"event","event_id":"\#(secondID)","mode":"full","status":"completed","segments":["second"]}"#,
+        ]])
+        let handler = BlockingEventHandler()
+        let bridge = BridgeProcess(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
+            launcher: launcher,
+            sleep: { _ in }
+        )
+
+        let task = Task { try await bridge.start { await handler.handle($0) } }
+        await handler.waitForFirstEvent()
+        let firstHandled = await handler.eventIDs
+        XCTAssertEqual(firstHandled, [firstID])
+
+        await handler.releaseFirstEvent()
+        try await task.value
+
+        let allHandled = await handler.eventIDs
+        XCTAssertEqual(allHandled, [firstID, secondID])
+        let acknowledgements = launcher.requests[0].standardInput.fileHandleForReading
+            .readDataToEndOfFile()
+            .split(separator: 0x0A)
+            .map { try! JSONSerialization.jsonObject(with: Data($0)) as! [String: String] }
+        XCTAssertEqual(acknowledgements, [
+            ["type": "ack", "event_id": firstID],
+            ["type": "ack", "event_id": secondID],
+        ])
+    }
+
     func testBridgeStopTerminatesOnlyCurrentlyOwnedChild() async throws {
         let process = BlockingManagedProcess()
         let launcher = HoldingProcessLauncher(process: process)
@@ -250,6 +287,24 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
 }
 
 final class ControlAndDiagnosticsTests: XCTestCase {
+    func testControlFailureDiagnosticUsesOnlyFixedMetadata() throws {
+        let runner = RecordingCommandRunner(outputs: [""])
+        let client = DiagnosticsClient(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
+            runner: runner
+        )
+
+        try client.recordControlFailure(.queueClearFailed)
+
+        XCTAssertEqual(runner.requests.first?.arguments, [
+            "-B", "-m", "codex_speak.diagnostics", "--data-dir", "/data", "record",
+            "--event-id", "000000000000000000000000", "--status", "unknown",
+            "--result", "failed", "--mode", "unknown", "--segment-count", "0",
+            "--duration-ms", "0", "--error-code", "queue_clear_failed",
+        ])
+    }
     func testControlClientsUseFixedArgumentsAndStrictStdout() throws {
         let runner = RecordingCommandRunner(outputs: ["summary\n", "full\n", "12\n"])
         let client = ControlClient(
@@ -319,6 +374,27 @@ private final class LockedValues<Value: Sendable>: @unchecked Sendable {
     private var storage: [Value] = []
     var values: [Value] { lock.withLock { storage } }
     func append(_ value: Value) { lock.withLock { storage.append(value) } }
+}
+
+private actor BlockingEventHandler {
+    private var events: [String] = []
+    private var released = false
+
+    var eventIDs: [String] { events }
+
+    func handle(_ message: BridgeMessage) async {
+        guard case let .event(event) = message else { return }
+        events.append(event.eventID)
+        if events.count == 1 {
+            while !released { await Task.yield() }
+        }
+    }
+
+    func waitForFirstEvent() async {
+        while events.isEmpty { await Task.yield() }
+    }
+
+    func releaseFirstEvent() { released = true }
 }
 
 private final class ImmediateManagedProcess: ManagedProcess, @unchecked Sendable {

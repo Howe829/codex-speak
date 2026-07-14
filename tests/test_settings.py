@@ -11,6 +11,18 @@ from codex_speak.settings import load_mode, save_mode
 
 
 class SettingsTests(unittest.TestCase):
+    def test_malformed_existing_settings_records_invalid_settings_without_content(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = "PRIVATE_MODE_CANARY_92741"
+            (root / "settings.json").write_text(secret, encoding="utf-8")
+
+            self.assertEqual(load_mode(root), "summary")
+
+            diagnostics = (root / "diagnostics.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"error_code":"invalid_settings"', diagnostics)
+            self.assertNotIn(secret, diagnostics)
+
     def test_default_private_and_persistent(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

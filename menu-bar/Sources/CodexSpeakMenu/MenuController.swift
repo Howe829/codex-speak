@@ -111,7 +111,7 @@ final class MenuController: NSObject {
             guard let self else { return }
             do {
                 try await bridge.start { [weak self] message in
-                    Task { @MainActor [weak self] in self?.handle(message) }
+                    await self?.handle(message)
                 }
             } catch {
                 showLocalError("Speech bridge stopped")
@@ -163,6 +163,7 @@ final class MenuController: NSObject {
         do {
             _ = try controlClient.clearPending()
         } catch {
+            try? diagnosticsClient.recordControlFailure(.queueClearFailed)
             showLocalError("Could not clear pending speeches")
         }
     }
@@ -190,15 +191,13 @@ final class MenuController: NSObject {
         }
     }
 
-    private func handle(_ message: BridgeMessage) {
+    private func handle(_ message: BridgeMessage) async {
         guard case let .event(event) = message else { return }
-        Task {
-            let result = await speechPlayer.play(event: event)
-            do {
-                try diagnosticsClient.record(event: event, result: result)
-            } catch {
-                showLocalError("Could not record playback result")
-            }
+        let result = await speechPlayer.play(event: event)
+        do {
+            try diagnosticsClient.record(event: event, result: result)
+        } catch {
+            showLocalError("Could not record playback result")
         }
     }
 

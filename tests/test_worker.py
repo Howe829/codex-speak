@@ -261,7 +261,7 @@ class WorkerTests(unittest.TestCase):
             diagnostics = (data_dir / "diagnostics.jsonl").read_text(
                 encoding="utf-8"
             )
-            self.assertIn('"error_code":"expired"', diagnostics)
+            self.assertIn('"error_code":"stale_event"', diagnostics)
             self.assertEqual(list((data_dir / "spool").glob("*.json")), [])
 
     def test_waits_repolls_and_holds_lock_through_sleep_and_speech(self) -> None:
