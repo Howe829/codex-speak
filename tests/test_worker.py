@@ -488,6 +488,7 @@ class WorkerTests(unittest.TestCase):
         popen.assert_called_once_with(
             [
                 ANY,
+                "-B",
                 "-m",
                 "codex_speak.worker",
                 "--data-dir",

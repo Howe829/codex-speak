@@ -91,7 +91,7 @@ public struct ControlClient: ControlClientProtocol, Sendable {
     private func run(module: String, tail: [String]) throws -> String {
         let request = CommandRequest(
             executableURL: pythonExecutableURL,
-            arguments: ["-m", module, "--data-dir", dataDirectory.path] + tail,
+            arguments: ["-B", "-m", module, "--data-dir", dataDirectory.path] + tail,
             currentDirectoryURL: pluginRoot
         )
         let result = try runner.run(request)

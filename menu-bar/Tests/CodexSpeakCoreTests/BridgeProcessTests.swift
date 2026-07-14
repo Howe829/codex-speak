@@ -105,7 +105,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(request.executableURL.path, "/custom/python")
             XCTAssertEqual(
                 request.arguments,
-                ["-m", "codex_speak.bridge", "watch", "--data-dir", "/data"]
+                ["-B", "-m", "codex_speak.bridge", "watch", "--data-dir", "/data"]
             )
             XCTAssertEqual(request.currentDirectoryURL.path, "/plugin")
         }
@@ -262,9 +262,9 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         try client.setMode(.full)
         XCTAssertEqual(try client.clearPending(), 12)
         XCTAssertEqual(runner.requests.map(\.arguments), [
-            ["-m", "codex_speak.settings", "--data-dir", "/data", "get"],
-            ["-m", "codex_speak.settings", "--data-dir", "/data", "set", "full"],
-            ["-m", "codex_speak.queue", "--data-dir", "/data", "clear-pending"],
+            ["-B", "-m", "codex_speak.settings", "--data-dir", "/data", "get"],
+            ["-B", "-m", "codex_speak.settings", "--data-dir", "/data", "set", "full"],
+            ["-B", "-m", "codex_speak.queue", "--data-dir", "/data", "clear-pending"],
         ])
         XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/custom/python" })
         XCTAssertTrue(runner.requests.allSatisfy { $0.currentDirectoryURL.path == "/plugin" })
@@ -305,7 +305,7 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         try client.record(event: event, result: PlaybackResult(outcome: .cancelled, errorCode: nil, completedSegmentCount: 0, durationMilliseconds: 5))
         try client.record(event: event, result: PlaybackResult(outcome: .failed, errorCode: .speechStartFailed, completedSegmentCount: 0, durationMilliseconds: 1))
 
-        let prefix = ["-m", "codex_speak.diagnostics", "--data-dir", "/data", "record", "--event-id", event.eventID, "--status", "completed", "--result"]
+        let prefix = ["-B", "-m", "codex_speak.diagnostics", "--data-dir", "/data", "record", "--event-id", event.eventID, "--status", "completed", "--result"]
         XCTAssertEqual(runner.requests[0].arguments, prefix + ["spoken", "--mode", "full", "--segment-count", "1", "--duration-ms", "25", "--error-code", "NONE"])
         XCTAssertEqual(runner.requests[1].arguments, prefix + ["cancelled", "--mode", "full", "--segment-count", "0", "--duration-ms", "5", "--error-code", "NONE"])
         XCTAssertEqual(runner.requests[2].arguments, prefix + ["failed", "--mode", "full", "--segment-count", "0", "--duration-ms", "1", "--error-code", "speech_start_failed"])

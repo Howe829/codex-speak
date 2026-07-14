@@ -29,7 +29,7 @@ public struct DiagnosticsClient: Sendable {
         let request = CommandRequest(
             executableURL: pythonExecutableURL,
             arguments: [
-                "-m", "codex_speak.diagnostics",
+                "-B", "-m", "codex_speak.diagnostics",
                 "--data-dir", dataDirectory.path,
                 "record",
                 "--event-id", event.eventID,

@@ -2,7 +2,10 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 
@@ -12,6 +15,80 @@ EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
 
 
 class PackagingTests(unittest.TestCase):
+    def test_python_plugin_entries_do_not_write_bytecode_into_installed_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            installed_root = Path(temporary) / "installed" / "codex-speak"
+            installed_root.mkdir(parents=True)
+            ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+            shutil.copytree(
+                ROOT / "codex_speak",
+                installed_root / "codex_speak",
+                ignore=ignore_bytecode,
+            )
+            shutil.copytree(
+                ROOT / "hooks",
+                installed_root / "hooks",
+                ignore=ignore_bytecode,
+            )
+            data_dir = Path(temporary) / "plugin-data"
+            environment = os.environ.copy()
+            environment.pop("PYTHONDONTWRITEBYTECODE", None)
+            environment.pop("PYTHONPYCACHEPREFIX", None)
+            environment["PLUGIN_ROOT"] = str(installed_root)
+
+            commands = (
+                ([sys.executable, "-B", str(installed_root / "hooks" / "session_start.py")], None),
+                ([sys.executable, "-B", str(installed_root / "hooks" / "stop.py")], "{}"),
+                ([sys.executable, "-B", "-m", "codex_speak.settings", "--data-dir", str(data_dir), "get"], None),
+                ([sys.executable, "-B", "-m", "codex_speak.queue", "--data-dir", str(data_dir), "clear-pending"], None),
+                ([sys.executable, "-B", "-m", "codex_speak.worker", "--help"], None),
+                ([sys.executable, "-B", "-m", "codex_speak.bridge", "--help"], None),
+                (
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "codex_speak.diagnostics",
+                        "--data-dir",
+                        str(data_dir),
+                        "record",
+                        "--event-id",
+                        "0123456789abcdef01234567",
+                        "--status",
+                        "completed",
+                        "--result",
+                        "spoken",
+                        "--mode",
+                        "full",
+                        "--segment-count",
+                        "1",
+                        "--duration-ms",
+                        "1",
+                        "--error-code",
+                        "NONE",
+                    ],
+                    None,
+                ),
+            )
+            for arguments, standard_input in commands:
+                with self.subTest(arguments=arguments):
+                    subprocess.run(
+                        arguments,
+                        cwd=installed_root,
+                        env=environment,
+                        input=standard_input,
+                        text=True,
+                        check=True,
+                        capture_output=True,
+                    )
+
+            bytecode = [
+                path.relative_to(installed_root)
+                for path in installed_root.rglob("*")
+                if path.name == "__pycache__" or path.suffix == ".pyc"
+            ]
+            self.assertEqual(bytecode, [])
+
     def test_manifest_has_exact_identity_and_only_supported_fields(self) -> None:
         manifest = json.loads(
             (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")

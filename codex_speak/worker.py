@@ -89,6 +89,7 @@ def spawn_worker(plugin_root: Path, data_dir: Path) -> None:
     subprocess.Popen(
         [
             sys.executable,
+            "-B",
             "-m",
             "codex_speak.worker",
             "--data-dir",

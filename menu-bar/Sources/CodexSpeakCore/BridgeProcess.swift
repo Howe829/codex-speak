@@ -127,7 +127,7 @@ public actor BridgeProcess {
             let standardOutput = Pipe()
             let request = ProcessLaunchRequest(
                 executableURL: pythonExecutableURL,
-                arguments: ["-m", "codex_speak.bridge", "watch", "--data-dir", dataDirectory.path],
+                arguments: ["-B", "-m", "codex_speak.bridge", "watch", "--data-dir", dataDirectory.path],
                 currentDirectoryURL: pluginRoot,
                 standardInput: standardInput,
                 standardOutput: standardOutput,

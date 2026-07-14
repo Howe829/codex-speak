@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/session_start.py\"",
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/session_start.py\"",
             "statusMessage": "Loading Codex Speak rules"
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/stop.py\""
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/stop.py\""
           }
         ]
       }

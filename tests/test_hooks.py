@@ -440,11 +440,11 @@ class HookTests(unittest.TestCase):
         stop_command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertEqual(
             session_command,
-            'python3 "${PLUGIN_ROOT}/hooks/session_start.py"',
+            'python3 -B "${PLUGIN_ROOT}/hooks/session_start.py"',
         )
         self.assertEqual(
             stop_command,
-            'python3 "${PLUGIN_ROOT}/hooks/stop.py"',
+            'python3 -B "${PLUGIN_ROOT}/hooks/stop.py"',
         )
         self.assertNotIn("PLUGIN_DATA", session_command + stop_command)
 
