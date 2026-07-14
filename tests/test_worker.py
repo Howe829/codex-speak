@@ -9,6 +9,7 @@ from unittest.mock import ANY, patch
 
 from codex_speak.protocol import Announcement
 from codex_speak.queue import enqueue, try_worker_lock
+from codex_speak.render import SpeechPayload
 from codex_speak.worker import run_worker, spawn_worker
 
 
@@ -45,7 +46,9 @@ class WorkerTests(unittest.TestCase):
 
             def fake_run(arguments, **kwargs):
                 remaining = [
-                    json.loads(path.read_text(encoding="utf-8"))["speech_text"]
+                    "\n".join(
+                        json.loads(path.read_text(encoding="utf-8"))["segments"]
+                    )
                     for path in (data_dir / "spool").glob("*.json")
                 ]
                 self.assertNotIn(kwargs["input"], remaining)
@@ -81,6 +84,37 @@ class WorkerTests(unittest.TestCase):
                     ([str(say_path)], "third"),
                 ],
             )
+
+    def test_temporarily_joins_segments_into_one_stdin_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            say_path = self._fake_executable(Path(temporary))
+            enqueue(
+                data_dir,
+                SpeechPayload("full", "silent", ("first", "second", "third")),
+                session_id="session",
+                turn_id="turn",
+                now=100.0,
+                clock_id=CLOCK_A,
+            )
+            inputs = []
+
+            def fake_run(arguments, **kwargs):
+                inputs.append(kwargs["input"])
+                return subprocess.CompletedProcess(arguments, 0)
+
+            result = run_worker(
+                data_dir,
+                say_path=say_path,
+                run_command=fake_run,
+                sleep=lambda _: None,
+                clock=lambda: 101.0,
+                monotonic=lambda: 10.0,
+                clock_id=CLOCK_A,
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(inputs, ["first\nsecond\nthird"])
 
     def test_fresh_event_is_spoken_across_different_wall_clock_domains(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

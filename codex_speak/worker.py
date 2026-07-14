@@ -54,7 +54,7 @@ def run_worker(
             try:
                 completed = runner(
                     [str(say_path)],
-                    input=event.speech_text,
+                    input="\n".join(event.segments),
                     text=True,
                     check=False,
                     stdout=subprocess.DEVNULL,
