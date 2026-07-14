@@ -62,6 +62,25 @@ class RenderTests(unittest.TestCase):
         self.assertIn("进度", normalized)
         self.assertIn("A ✅", normalized)
 
+    def test_normalizes_four_backtick_fence(self) -> None:
+        body = "前文\n````python\nx = 1\n````\n后文"
+        self.assertEqual(normalize_full_text(body), "前文 代码 后文")
+
+    def test_does_not_match_mismatched_fence_delimiters(self) -> None:
+        body = "前文\n```python\nx = 1\n~~~\n后文"
+        self.assertEqual(
+            normalize_full_text(body),
+            "前文 ```python x = 1 ~ 后文",
+        )
+
+    def test_normalizes_matching_multi_backtick_inline_code(self) -> None:
+        body = "前文 ``x = `tick` `` 后文"
+        self.assertEqual(normalize_full_text(body), "前文 代码 后文")
+
+    def test_replaces_complete_home_relative_path(self) -> None:
+        body = "查看 ~/secret/file.txt 获取详情"
+        self.assertEqual(normalize_full_text(body), "查看 相关文件 获取详情")
+
     def test_empty_full_body_returns_none(self) -> None:
         self.assertIsNone(render_speech(ParsedResponse("silent", "", " \n\t"), "full"))
 

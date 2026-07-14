@@ -12,14 +12,17 @@ SpeechMode = Literal["summary", "full"]
 MAX_SEGMENT_CHARS: Final[int] = 600
 
 _FENCED_CODE_RE = re.compile(
-    r"(?ms)^[ \t]*(?:```|~~~)[^\r\n]*\r?\n.*?^[ \t]*(?:```|~~~)[ \t]*$"
+    r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*\r?\n"
+    r".*?^[ \t]*(?P=fence)[ \t]*$"
 )
 _IMAGE_RE = re.compile(r"!\[[^\]\r\n]*\]\([^\)\r\n]*\)")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
-_INLINE_CODE_RE = re.compile(r"`+[^`\r\n]*`+")
+_INLINE_CODE_RE = re.compile(
+    r"(?<!`)(?P<ticks>`+)(?!`)[^\r\n]*?(?<!`)(?P=ticks)(?!`)"
+)
 _URL_RE = re.compile(r"https?://[^\s,，。！？!?]+")
 _PATH_RE = re.compile(
-    r"(?<![\w])(?:~|/)(?:[^/,，\s。；！？!?()\[\]{}]+/)*"
+    r"(?<![\w])(?:~/|/)(?:[^/,，\s。；！？!?()\[\]{}]+/)*"
     r"[^/,，\s。；！？!?()\[\]{}]+"
 )
 _TABLE_SEPARATOR_RE = re.compile(
