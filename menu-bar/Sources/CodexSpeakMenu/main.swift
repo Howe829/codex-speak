@@ -19,7 +19,7 @@ do {
     arguments = try StrictMenuArguments.parse(Array(CommandLine.arguments.dropFirst()))
 } catch {
     FileHandle.standardError.write(
-        Data("usage: CodexSpeakMenu --plugin-root ABSOLUTE --data-dir ABSOLUTE --python-executable ABSOLUTE\n".utf8)
+        Data("usage: CodexSpeakMenu --plugin-root ABSOLUTE --data-dir ABSOLUTE --python-executable ABSOLUTE --helper-identity SHA256\n".utf8)
     )
     exit(2)
 }
@@ -36,6 +36,7 @@ do {
         pluginRoot: pluginRoot,
         dataDirectory: dataDirectory,
         pythonExecutableURL: pythonExecutableURL,
+        helperIdentity: arguments.helperIdentity,
         configURL: codexConfigURL()
     )
     try controller.start()

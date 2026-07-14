@@ -15,14 +15,16 @@ public final class Heartbeat: @unchecked Sendable {
     public let stateURL: URL
     private let processID: Int32
     private let bootID: String
+    private let identity: String
     private let monotonic: @Sendable () -> Double
 
-    public convenience init(stateURL: URL) throws {
+    public convenience init(stateURL: URL, identity: String) throws {
         guard let bootID = currentBootID() else { throw HeartbeatError.invalidBootID }
         try self.init(
             stateURL: stateURL,
             processID: getpid(),
             bootID: bootID,
+            identity: identity,
             monotonic: { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 }
         )
     }
@@ -31,15 +33,20 @@ public final class Heartbeat: @unchecked Sendable {
         stateURL: URL,
         processID: Int32,
         bootID: String,
+        identity: String,
         monotonic: @escaping @Sendable () -> Double
     ) throws {
         guard processID > 0 else { throw HeartbeatError.invalidProcessID }
         guard let normalizedBootID = normalizeBootID(bootID) else {
             throw HeartbeatError.invalidBootID
         }
+        guard normalizeHelperIdentity(identity) != nil else {
+            throw HeartbeatError.cannotWrite
+        }
         self.stateURL = stateURL
         self.processID = processID
         self.bootID = normalizedBootID
+        self.identity = identity
         self.monotonic = monotonic
     }
 
@@ -64,10 +71,11 @@ public final class Heartbeat: @unchecked Sendable {
         let data: Data
         do {
             data = try JSONSerialization.data(withJSONObject: [
-                "version": 1,
+                "version": 2,
                 "pid": Int(processID),
                 "boot_id": bootID,
                 "monotonic": timestamp,
+                "identity": identity,
             ])
         } catch {
             throw HeartbeatError.cannotWrite
@@ -91,8 +99,24 @@ public final class Heartbeat: @unchecked Sendable {
     }
 
     public func remove() {
+        guard let data = try? Data(contentsOf: stateURL),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any],
+              jsonInteger(dictionary["version"]) == 2,
+              jsonInteger(dictionary["pid"]) == Int(processID),
+              dictionary["identity"] as? String == identity else {
+            return
+        }
         try? FileManager.default.removeItem(at: stateURL)
     }
+}
+
+private func normalizeHelperIdentity(_ value: String) -> String? {
+    guard value.utf8.count == 64,
+          value.utf8.allSatisfy({
+              ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+          }) else { return nil }
+    return value
 }
 
 public func normalizeBootID(_ value: String) -> String? {
@@ -122,6 +146,7 @@ public func currentBootID() -> String? {
 public func readCurrentHeartbeat(
     stateURL: URL,
     currentBootID: String,
+    expectedIdentity: String,
     now: Double,
     expectedProcessID: Int? = nil
 ) -> Int? {
@@ -129,12 +154,15 @@ public func readCurrentHeartbeat(
           let data = try? Data(contentsOf: stateURL),
           let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any],
-          Set(dictionary.keys) == ["version", "pid", "boot_id", "monotonic"],
-          let version = jsonInteger(dictionary["version"]), version == 1,
+          Set(dictionary.keys) == ["version", "pid", "boot_id", "monotonic", "identity"],
+          let version = jsonInteger(dictionary["version"]), version == 2,
           let processID = jsonInteger(dictionary["pid"]), processID > 0,
           expectedProcessID == nil || expectedProcessID == processID,
           let storedBootID = dictionary["boot_id"] as? String,
           normalizeBootID(storedBootID) == normalizedBootID,
+          let storedIdentity = dictionary["identity"] as? String,
+          normalizeHelperIdentity(storedIdentity) == expectedIdentity,
+          normalizeHelperIdentity(expectedIdentity) != nil,
           let timestamp = jsonDouble(dictionary["monotonic"]), timestamp.isFinite else {
         return nil
     }

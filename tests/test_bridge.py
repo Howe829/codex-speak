@@ -106,6 +106,7 @@ class BridgeTests(unittest.TestCase):
         helper = self._helper()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "plugin"
+            root.mkdir()
             data_dir = Path(temporary) / "data"
             executable = root / helper.HELPER
             executable.parent.mkdir(parents=True)
@@ -128,14 +129,17 @@ class BridgeTests(unittest.TestCase):
         helper = self._helper()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "plugin"
+            root.mkdir()
             data_dir = Path(temporary) / "data"
             data_dir.mkdir()
+            identity = helper._helper_identity(root)
             executable = root / "helper"
             state = {
-                "version": 1,
+                "version": 2,
                 "pid": 321,
                 "boot_id": CLOCK,
                 "monotonic": 100.0,
+                "identity": identity,
             }
             (data_dir / "helper-state.json").write_text(
                 json.dumps(state), encoding="utf-8"
@@ -149,10 +153,106 @@ class BridgeTests(unittest.TestCase):
                 popen=lambda *_args, **_kwargs: self.fail("helper relaunched"),
             )
 
+    def test_heartbeat_from_other_plugin_identity_does_not_suppress_launch(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "plugin-current"
+            root.mkdir()
+            old_root = Path(temporary) / "plugin-old"
+            old_root.mkdir()
+            data_dir = Path(temporary) / "data"
+            data_dir.mkdir()
+            state_path = data_dir / "helper-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "pid": 321,
+                        "boot_id": CLOCK,
+                        "monotonic": 100.0,
+                        "identity": helper._helper_identity(old_root),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class Process:
+                pid = 444
+
+            launches = []
+
+            def sleep(_seconds):
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "version": 2,
+                            "pid": 444,
+                            "boot_id": CLOCK,
+                            "monotonic": 100.0,
+                            "identity": helper._helper_identity(root),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            helper.launch_verified_helper(
+                Path("/helper"),
+                root,
+                data_dir,
+                monotonic=lambda: 100.0,
+                boot_id_loader=lambda: CLOCK,
+                popen=lambda arguments, **_kwargs: (
+                    launches.append(arguments) or Process()
+                ),
+                sleep=sleep,
+            )
+            identity = helper._helper_identity(root)
+            self.assertEqual(len(identity), 64)
+            self.assertNotIn(str(root), identity)
+            self.assertEqual(
+                launches,
+                [[
+                    "/helper",
+                    "--plugin-root",
+                    str(root.resolve()),
+                    "--data-dir",
+                    str(data_dir),
+                    "--python-executable",
+                    str(Path(sys.executable)),
+                    "--helper-identity",
+                    identity,
+                ]],
+            )
+
+    def test_version_one_heartbeat_is_not_accepted_after_identity_upgrade(self) -> None:
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "helper-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "pid": 321,
+                        "boot_id": CLOCK,
+                        "monotonic": 100.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertIsNone(
+                helper._read_current_state(
+                    state_path,
+                    current_boot_id=CLOCK,
+                    now=101.0,
+                    expected_identity="0" * 64,
+                )
+            )
+
     def test_stale_or_invalid_heartbeat_is_removed_without_signaling_pid(self) -> None:
         helper = self._helper()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "plugin"
+            root.mkdir()
             data_dir = Path(temporary) / "data"
             data_dir.mkdir()
             state_path = data_dir / "helper-state.json"
@@ -179,10 +279,11 @@ class BridgeTests(unittest.TestCase):
                 state_path.write_text(
                     json.dumps(
                         {
-                            "version": 1,
+                            "version": 2,
                             "pid": 444,
                             "boot_id": CLOCK,
                             "monotonic": 100.0,
+                            "identity": helper._helper_identity(root),
                         }
                     ),
                     encoding="utf-8",
@@ -207,11 +308,13 @@ class BridgeTests(unittest.TestCase):
                 [[
                     "/helper",
                     "--plugin-root",
-                    str(root),
+                    str(root.resolve()),
                     "--data-dir",
                     str(data_dir),
                     "--python-executable",
                     str(Path(sys.executable)),
+                    "--helper-identity",
+                    helper._helper_identity(root),
                 ]],
             )
 

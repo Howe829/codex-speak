@@ -14,6 +14,7 @@ final class MenuController: NSObject {
     private let bridge: BridgeProcess
     private let heartbeat: Heartbeat
     private let configURL: URL
+    private let pluginRoot: URL
     private let summaryItem: NSMenuItem
     private let fullItem: NSMenuItem
     private var selectedMode = SpeechMode.summary
@@ -28,6 +29,7 @@ final class MenuController: NSObject {
         pluginRoot: URL,
         dataDirectory: URL,
         pythonExecutableURL: URL,
+        helperIdentity: String,
         configURL: URL
     ) throws {
         self.application = application
@@ -47,8 +49,12 @@ final class MenuController: NSObject {
             dataDirectory: dataDirectory,
             pythonExecutableURL: pythonExecutableURL
         )
-        heartbeat = try Heartbeat(stateURL: dataDirectory.appendingPathComponent("helper-state.json"))
+        heartbeat = try Heartbeat(
+            stateURL: dataDirectory.appendingPathComponent("helper-state.json"),
+            identity: helperIdentity
+        )
         self.configURL = configURL
+        self.pluginRoot = pluginRoot
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         summaryItem = NSMenuItem(title: Self.itemTitles[0], action: #selector(selectSummary), keyEquivalent: "")
         fullItem = NSMenuItem(title: Self.itemTitles[1], action: #selector(selectFull), keyEquivalent: "")
@@ -164,6 +170,10 @@ final class MenuController: NSObject {
     }
 
     @objc private func writeHeartbeat() {
+        if shouldTerminateHelper(pluginRootURL: pluginRoot, configURL: configURL) {
+            Task { await orderlyShutdown() }
+            return
+        }
         do {
             try heartbeat.write()
         } catch {
@@ -173,7 +183,7 @@ final class MenuController: NSObject {
     }
 
     @objc private func checkEnablement() {
-        if readCodexSpeakEnablement(configURL: configURL) == .disabled {
+        if shouldTerminateHelper(pluginRootURL: pluginRoot, configURL: configURL) {
             Task { await orderlyShutdown() }
         }
     }

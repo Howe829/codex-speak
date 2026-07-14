@@ -3,6 +3,18 @@ import XCTest
 @testable import CodexSpeakCore
 
 final class PluginEnablementTests: XCTestCase {
+    func testLifecycleTerminatesWhenPluginRootDisappears() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config = try temporaryConfig("")
+        XCTAssertFalse(shouldTerminateHelper(pluginRootURL: root, configURL: config))
+
+        try FileManager.default.removeItem(at: root)
+
+        XCTAssertTrue(shouldTerminateHelper(pluginRootURL: root, configURL: config))
+    }
+
     func testReadsOnlyExactCodexSpeakPluginTables() throws {
         let url = try temporaryConfig(
             #"""

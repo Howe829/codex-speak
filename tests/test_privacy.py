@@ -43,10 +43,11 @@ class PrivacyAndPackagingTests(unittest.TestCase):
             state_path.write_text(
                 json.dumps(
                     {
-                        "version": 1,
+                        "version": 2,
                         "pid": 123,
                         "boot_id": "11111111-1111-1111-1111-111111111111",
                         "monotonic": 10.0,
+                        "identity": "0" * 64,
                     }
                 ),
                 encoding="utf-8",
