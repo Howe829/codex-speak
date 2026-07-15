@@ -105,6 +105,7 @@ class PackagingTests(unittest.TestCase):
             (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["name"], "codex-speak")
+        self.assertEqual(manifest["version"], "0.2.1")
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(
             set(manifest),

@@ -1,6 +1,6 @@
 {
   "name": "codex-speak",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Speaks concise Codex outcomes or complete responses on macOS.",
   "author": {"name": "Howard"},
   "license": "MIT",

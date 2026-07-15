@@ -53,6 +53,8 @@ conversation preferences; the plugin does not hard-code a user's name.
 The default macOS voice and rate are used. `Plugin Toggle` in Codex controls the whole plugin,
 including both hooks and speech; it is not a mode selector.
 Use `Summary` or `Full` in the menu to change only the speech mode.
+The checkmark is refreshed from persisted settings whenever the menu opens, so
+changes made by another trusted local control are reflected before selection.
 
 ## Menu controls
 
@@ -100,6 +102,11 @@ plugins do not announce the same turn. Install `codex-speak@personal`, trust
 its current hooks in `/hooks`, and start a new thread. Old runtime data is not
 imported; mode and queue state begin cleanly under the Codex Speak plugin data
 directory.
+
+New tasks use an unused CommonMark reference definition for private speech
+control metadata, so the marker is not shown in rendered responses. Tasks
+started before version 0.2.1 may keep displaying the transitional v1 HTML
+comment until a new task loads the v2 SessionStart instructions.
 
 ## Test and validate
 
@@ -170,6 +177,8 @@ Review changed definitions in `/hooks` and start a new thread afterward.
   bundled hooks in `/hooks`.
 - No speech in an existing thread: start a new thread so SessionStart injects
   the protocol.
+- A speech-control comment is visible below a response: the task still has the
+  pre-0.2.1 protocol; start a new task after reinstalling and trusting hooks.
 - Menu missing but speech works: the Python fallback is active; rebuild the
   embedded app and reinstall after updating the cachebuster.
 - Menu opens but actions fail: verify `python3` is still executable and the
