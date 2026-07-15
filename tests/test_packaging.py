@@ -15,6 +15,17 @@ EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
 
 
 class PackagingTests(unittest.TestCase):
+    def test_menu_refreshes_persisted_mode_when_opened(self) -> None:
+        source = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("NSObject, NSMenuDelegate", source)
+        self.assertIn("menu.delegate = self", source)
+        self.assertRegex(
+            source,
+            r"func menuWillOpen\(_ menu: NSMenu\)\s*\{\s*refreshMode\(\)\s*\}",
+        )
+
     def test_python_plugin_entries_do_not_write_bytecode_into_installed_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             installed_root = Path(temporary) / "installed" / "codex-speak"

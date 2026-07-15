@@ -3,7 +3,7 @@ import CodexSpeakCore
 import Foundation
 
 @MainActor
-final class MenuController: NSObject {
+final class MenuController: NSObject, NSMenuDelegate {
     static let itemTitles = codexSpeakMenuItemTitles
 
     private let application: NSApplication
@@ -84,8 +84,13 @@ final class MenuController: NSObject {
             item.target = self
             menu.addItem(item)
         }
+        menu.delegate = self
         statusItem.menu = menu
         updateCheckmarks()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshMode()
     }
 
     func start() throws {
