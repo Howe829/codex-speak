@@ -13,9 +13,13 @@ IMPORTANT_STATUSES: Final[frozenset[str]] = frozenset(
 ALL_STATUSES: Final[frozenset[str]] = IMPORTANT_STATUSES | {"silent"}
 HARD_LIMIT: Final[int] = 280
 
-_MARKER_RE = re.compile(
+_V1_MARKER_RE = re.compile(
     r"(?:\A|\n)<!-- codex-speak:v1 (?P<payload>\{[^\r\n]*\}) -->\s*\Z"
 )
+_V2_MARKER_RE = re.compile(
+    r"(?:\A|\n)\[codex-speak-v2\]: <codex-speak:v2#(?P<payload>\{[^\r\n]*\})>\s*\Z"
+)
+_MARKER_SENTINELS: Final[tuple[str, ...]] = ("codex-speak:v", "[codex-speak-v")
 _WHITESPACE_RE = re.compile(r"\s+")
 _URL_RE = re.compile(r"https?://[^\s,，。！？!?]+")
 _ABSOLUTE_PATH_RE = re.compile(
@@ -94,14 +98,21 @@ def extract_response(message: str | None) -> ParsedResponse | None:
     if not isinstance(message, str):
         return None
 
-    matches = list(_MARKER_RE.finditer(message))
+    matches = [
+        *(('v1', match) for match in _V1_MARKER_RE.finditer(message)),
+        *(('v2', match) for match in _V2_MARKER_RE.finditer(message)),
+    ]
     if len(matches) != 1:
         return None
-    match = matches[0]
-    parsed = _parse_exact_payload(match.group("payload"))
+    version, match = matches[0]
+    payload_text = match.group("payload")
+    if version == "v2" and any(character in payload_text for character in "<>"):
+        return None
+    parsed = _parse_exact_payload(payload_text)
     if parsed is None:
         return None
-    if "codex-speak:v1" in message[: match.start()]:
+    prefix = message[: match.start()]
+    if any(sentinel in prefix for sentinel in _MARKER_SENTINELS):
         return None
     status, summary = parsed
-    return ParsedResponse(status, summary, message[: match.start()].rstrip())
+    return ParsedResponse(status, summary, prefix.rstrip())

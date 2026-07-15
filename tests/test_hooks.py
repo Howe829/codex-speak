@@ -35,7 +35,11 @@ class HookTests(unittest.TestCase):
         specific = output["hookSpecificOutput"]
         self.assertEqual(specific["hookEventName"], "SessionStart")
         context = specific["additionalContext"]
-        self.assertIn("codex-speak:v1", context)
+        self.assertIn("[codex-speak-v2]", context)
+        self.assertIn("codex-speak:v2#", context)
+        self.assertIn("CommonMark reference definition", context)
+        self.assertNotIn("append exactly one single-line HTML comment", context)
+        self.assertNotIn("codex-speak:v1", context)
         self.assertNotIn("codex-voice-notifier:v1", context)
         self.assertNotIn("Stop Current Speech", context)
         self.assertNotIn("Clear Pending Speeches", context)

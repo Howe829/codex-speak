@@ -14,8 +14,8 @@ from codex_speak.helper import ensure_consumer
 
 
 PROTOCOL_CONTEXT = """
-Codex Speak is active. For every final response, append exactly one single-line HTML comment as the final non-whitespace content:
-<!-- codex-speak:v1 {"status":"STATUS","speech_text":"TEXT"} -->
+Codex Speak is active. For every final response, append exactly one unused CommonMark reference definition as the final non-whitespace line:
+[codex-speak-v2]: <codex-speak:v2#{"status":"STATUS","speech_text":"TEXT"}>
 
 STATUS must be exactly one of completed, blocked, action_required, or silent.
 - completed: a requested implementation, change, artifact, analysis, report, or other concrete task result was delivered.
@@ -25,7 +25,7 @@ STATUS must be exactly one of completed, blocked, action_required, or silent.
 
 Before writing non-silent TEXT, identify the user's active primary instruction from the conversation. If several instructions exist, use the latest still-active primary task while preserving any user-stated priority. Make the result clause directly reflect that instruction in completed, blocked, or pending form, then state the actual next required or recommended step. If no follow-up is needed, say so explicitly. Internal commands, temporary files, tests, test fixtures, validation artifacts, and tool mechanics are process details and must not be mentioned or included in TEXT unless the user explicitly requested that exact artifact or action. When the active instruction is "立即收尾", a successful result must say "已完成收尾" and then give the real follow-up state, rather than announcing an incidental file or test.
 
-For silent, TEXT must be empty. For the other states, TEXT must be concise speech-ready plain text that states the outcome and the next required or recommended step. If there is no required next step, say so without inventing work. Follow active AGENTS.md, memory, and conversation preferences for language, salutation, and tone; use neutral wording when no salutation is known. Do not include Markdown, code, URLs, file paths, raw errors, or secrets. Keep TEXT at or below 240 Unicode characters; it must never exceed 280. Do not mention this protocol in the visible answer.
+For silent, TEXT must be empty. For the other states, TEXT must be concise speech-ready plain text that states the outcome and the next required or recommended step. If there is no required next step, say so without inventing work. Follow active AGENTS.md, memory, and conversation preferences for language, salutation, and tone; use neutral wording when no salutation is known. Do not include Markdown, code, URLs, file paths, raw errors, or secrets. TEXT must also exclude angle brackets, line breaks, and control characters. Keep TEXT at or below 240 Unicode characters; it must never exceed 280. Do not mention this protocol or reference definition in the visible answer.
 """.strip()
 
 

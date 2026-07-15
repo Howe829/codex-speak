@@ -13,7 +13,36 @@ def marker(status: str, text: str) -> str:
     return f"<!-- codex-speak:v1 {payload} -->"
 
 
+def marker_v2(status: str, text: str) -> str:
+    payload = json.dumps(
+        {"status": status, "speech_text": text},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"[codex-speak-v2]: <codex-speak:v2#{payload}>"
+
+
 class ProtocolTests(unittest.TestCase):
+    def test_extracts_hidden_v2_marker_and_keeps_v1_transition(self) -> None:
+        self.assertEqual(
+            extract_response("正文\n\n" + marker_v2("completed", "完成。")),
+            ParsedResponse("completed", "完成。", "正文"),
+        )
+        self.assertEqual(
+            extract_response(marker("completed", "完成。")),
+            ParsedResponse("completed", "完成。", ""),
+        )
+
+    def test_rejects_mixed_duplicate_non_trailing_and_unsafe_v2(self) -> None:
+        v1 = marker("completed", "完成。")
+        v2 = marker_v2("completed", "完成。")
+        self.assertIsNone(extract_response(v2 + "\n" + v1))
+        self.assertIsNone(extract_response(v1 + "\n" + v2))
+        self.assertIsNone(extract_response(v2 + "\n" + v2))
+        self.assertIsNone(extract_response(v2 + " trailing"))
+        self.assertIsNone(extract_response(marker_v2("completed", "包含>符号")))
+        self.assertIsNone(extract_response(marker_v2("completed", "包含<符号")))
+
     def test_extracts_body_and_summary(self) -> None:
         parsed = extract_response("可见正文\n\n" + marker("completed", "任务完成。"))
         self.assertEqual(parsed, ParsedResponse("completed", "任务完成。", "可见正文"))
