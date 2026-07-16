@@ -11,7 +11,7 @@ from .diagnostics import record
 
 
 _VERSION: Final[int] = 1
-_MODES: Final[frozenset[str]] = frozenset({"summary", "full"})
+_MODES: Final[frozenset[str]] = frozenset({"silent", "summary", "full"})
 
 
 class _ExactArgumentParser(argparse.ArgumentParser):

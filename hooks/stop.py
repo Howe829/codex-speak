@@ -84,8 +84,21 @@ def handle_event(
 
     try:
         mode = mode_loader(data_dir)
-        speech = render_speech(parsed, mode)
     except (OSError, TypeError, ValueError):
+        record(
+            data_dir,
+            event_id=safe_event_id,
+            status=parsed.status,
+            result="failed",
+            mode="unknown",
+            error_code="invalid_settings",
+        )
+        return False
+    if mode == "silent":
+        return False
+    try:
+        speech = render_speech(parsed, mode)
+    except (TypeError, ValueError):
         record(
             data_dir,
             event_id=safe_event_id,

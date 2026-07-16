@@ -34,6 +34,16 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(save_mode(root, "full"), "full")
             self.assertEqual(load_mode(root), "full")
 
+    def test_silent_mode_persists_with_version_one_across_loads(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(save_mode(root, "silent"), "silent")
+            self.assertEqual(load_mode(root), "silent")
+            self.assertEqual(
+                json.loads((root / "settings.json").read_text(encoding="utf-8")),
+                {"version": 1, "mode": "silent"},
+            )
+
     def test_invalid_repairs_to_summary(self) -> None:
         invalid_values = (
             {"version": 1, "mode": "bad"},
@@ -105,6 +115,20 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(get_full.returncode, 0)
             self.assertEqual(get_full.stdout, "full\n")
             self.assertEqual(get_full.stderr, "")
+
+    def test_cli_sets_and_gets_silent(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            set_silent = self._run_cli(root, "set", "silent")
+            self.assertEqual(
+                (set_silent.returncode, set_silent.stdout, set_silent.stderr),
+                (0, "silent\n", ""),
+            )
+            get_silent = self._run_cli(root, "get")
+            self.assertEqual(
+                (get_silent.returncode, get_silent.stdout, get_silent.stderr),
+                (0, "silent\n", ""),
+            )
 
     def test_cli_rejects_abbreviated_options(self) -> None:
         with TemporaryDirectory() as directory:

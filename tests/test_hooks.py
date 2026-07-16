@@ -120,6 +120,33 @@ class HookTests(unittest.TestCase):
             result = poll_next(data_dir, now=time.monotonic() + 2.0)
             self.assertEqual(result.event.speech_text if result.event else None, "任务完成")
 
+    def test_silent_control_mode_does_not_render_enqueue_or_start_consumer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            payload = {
+                "session_id": "silent-session",
+                "turn_id": "silent-turn",
+                "last_assistant_message": assistant_message(
+                    "completed", "PRIVATE SPEECH"
+                ),
+            }
+            with (
+                patch("hooks.stop.render_speech") as renderer,
+                patch("hooks.stop.enqueue") as enqueue_event,
+            ):
+                result = handle_event(
+                    payload,
+                    plugin_root=Path(temporary),
+                    data_dir=data_dir,
+                    platform_name="darwin",
+                    mode_loader=lambda _: "silent",
+                    start_consumer=lambda *_: self.fail("consumer must not start"),
+                )
+            self.assertFalse(result)
+            renderer.assert_not_called()
+            enqueue_event.assert_not_called()
+            self.assertFalse((data_dir / "spool").exists())
+
     def test_summary_silent_missing_marker_and_duplicate_do_not_start_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
