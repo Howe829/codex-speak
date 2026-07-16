@@ -16,6 +16,23 @@ EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
 
 
 class PackagingTests(unittest.TestCase):
+    def test_menu_uses_one_template_mark_with_alpha_prompt_cutouts(self) -> None:
+        controller = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
+        ).read_text(encoding="utf-8")
+        status_icon = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "StatusIcon.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("applyDefaultStatusIcon()", controller)
+        self.assertIn("StatusIcon.makeTemplateImage()", controller)
+        self.assertIn("image.isTemplate = true", status_icon)
+        self.assertIn("compositingOperation = .clear", status_icon)
+        self.assertIn("CodexSpeakIconGeometry.chevronCutout", status_icon)
+        self.assertIn("CodexSpeakIconGeometry.cursorCutout", status_icon)
+        self.assertNotIn('title = "◖))"', controller)
+        self.assertNotIn('title = "!"', controller)
+        self.assertNotIn("systemSymbolName:", controller + status_icon)
+
     def test_menu_checkmarks_compare_all_modes_against_selected_mode(self) -> None:
         source = (
             ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"

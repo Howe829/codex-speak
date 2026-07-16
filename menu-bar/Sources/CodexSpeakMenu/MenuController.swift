@@ -73,8 +73,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         fullItem = NSMenuItem(title: Self.itemTitles[2], action: #selector(selectFull), keyEquivalent: "")
         super.init()
 
-        statusItem.button?.title = "◖))"
-        statusItem.button?.toolTip = "Codex Speak"
+        applyDefaultStatusIcon()
         let menu = NSMenu()
         let stopItem = NSMenuItem(
             title: Self.itemTitles[3],
@@ -251,8 +250,15 @@ final class MenuController: NSObject, NSMenuDelegate {
         application.terminate(nil)
     }
 
+    private func applyDefaultStatusIcon() {
+        statusItem.button?.title = ""
+        statusItem.button?.image = StatusIcon.makeTemplateImage()
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.toolTip = "Codex Speak"
+    }
+
     private func showLocalError(_ message: String) {
-        statusItem.button?.title = "!"
+        applyDefaultStatusIcon()
         statusItem.button?.toolTip = message
         errorTimer?.invalidate()
         errorTimer = Timer(
@@ -266,8 +272,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func clearLocalError() {
-        statusItem.button?.title = "◖))"
-        statusItem.button?.toolTip = "Codex Speak"
+        applyDefaultStatusIcon()
         errorTimer = nil
     }
 }
