@@ -17,7 +17,7 @@ _FENCE_OPEN_RE = re.compile(
 _IMAGE_RE = re.compile(r"!\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _INLINE_CODE_RE = re.compile(
-    r"(?<!`)(?P<ticks>`+)(?!`)[^\r\n]*?(?<!`)(?P=ticks)(?!`)"
+    r"(?<!`)(?P<ticks>`+)(?!`)(?P<content>[^\r\n]*?)(?<!`)(?P=ticks)(?!`)"
 )
 _URL_RE = re.compile(r"https?://[^\s,，。！？!?]+")
 _PATH_RE = re.compile(
@@ -75,13 +75,27 @@ def _replace_fenced_code(value: str) -> str:
     return "".join(parts)
 
 
+def _replace_inline_code(match: re.Match[str]) -> str:
+    ticks = match.group("ticks")
+    content = match.group("content").strip()
+    is_label = (
+        len(ticks) == 1
+        and 1 <= len(content) <= 32
+        and all(
+            char.isalnum() or char.isspace() or char == "-"
+            for char in content
+        )
+    )
+    return content if is_label else "代码"
+
+
 def normalize_full_text(value: str) -> str:
     text = _remove_unicode_controls(value)
     text = _replace_fenced_code(text)
     text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
     text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
-    text = _INLINE_CODE_RE.sub("代码", text)
+    text = _INLINE_CODE_RE.sub(_replace_inline_code, text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
     text = _TABLE_SEPARATOR_RE.sub("", text)

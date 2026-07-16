@@ -110,6 +110,26 @@ class RenderTests(unittest.TestCase):
         body = "前文 ``x = `tick` `` 后文"
         self.assertEqual(normalize_full_text(body), "前文 代码 后文")
 
+    def test_preserves_short_prose_labels_in_single_backticks(self) -> None:
+        body = "模式为 `Full`、`Summary`、`codex-speak`、`语音模式` 和 `two words`。"
+        self.assertEqual(
+            normalize_full_text(body),
+            "模式为 Full、Summary、codex-speak、语音模式 和 two words。",
+        )
+
+    def test_replaces_code_shaped_and_ambiguous_inline_spans(self) -> None:
+        cases = (
+            "`x=1`",
+            "`run()`",
+            "`~/secret`",
+            "`a | b`",
+            "`" + "a" * 33 + "`",
+            "``plain label``",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), "代码")
+
     def test_replaces_complete_home_relative_path(self) -> None:
         body = "查看 ~/secret/file.txt 获取详情"
         self.assertEqual(normalize_full_text(body), "查看 相关文件 获取详情")
