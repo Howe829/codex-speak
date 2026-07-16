@@ -63,8 +63,16 @@ class _CodeFragment:
 _TextFragment = _OrdinaryFragment | _LabelFragment | _CodeFragment
 
 
-def _remove_unicode_controls(value: str) -> str:
-    return "".join(
+@dataclass(frozen=True, slots=True)
+class _MarkdownContainer:
+    kind: Literal["image", "link"]
+    start: int
+    end: int
+    visible_text: str
+
+
+def _normalize_unicode_char(char: str) -> str:
+    return (
         "\n"
         if char in {"\r", "\n"}
         else " "
@@ -72,12 +80,15 @@ def _remove_unicode_controls(value: str) -> str:
         else ""
         if unicodedata.category(char) in {"Cc", "Cf"}
         else char
-        for char in value
     )
 
 
-def _replace_fenced_code(value: str) -> str:
-    parts: list[str] = []
+def _remove_unicode_controls(value: str) -> str:
+    return "".join(_normalize_unicode_char(char) for char in value)
+
+
+def _fenced_code_ranges(value: str) -> tuple[tuple[int, int], ...]:
+    ranges: list[tuple[int, int]] = []
     cursor = 0
     while opening := _FENCE_OPEN_RE.search(value, cursor):
         fence = opening.group("fence")
@@ -87,10 +98,43 @@ def _replace_fenced_code(value: str) -> str:
         closing = closing_re.search(value, opening.end())
         if closing is None:
             break
-        parts.extend((value[cursor : opening.start()], "代码块"))
+        ranges.append((opening.start(), closing.end()))
         cursor = closing.end()
+    return tuple(ranges)
+
+
+def _replace_ranges(
+    value: str, ranges: tuple[tuple[int, int], ...]
+) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end in ranges:
+        parts.extend((value[cursor:start], "代码块"))
+        cursor = end
     parts.append(value[cursor:])
     return "".join(parts)
+
+
+def _replace_fenced_code(value: str) -> str:
+    return _replace_ranges(value, _fenced_code_ranges(value))
+
+
+def _replace_fenced_code_before_fragmenting(value: str) -> str:
+    normalized_chars: list[str] = []
+    boundaries = [0]
+    for index, char in enumerate(value):
+        normalized = _normalize_unicode_char(char)
+        if normalized:
+            normalized_chars.append(normalized)
+            boundaries.append(index + 1)
+
+    normalized_value = "".join(normalized_chars)
+    normalized_ranges = _fenced_code_ranges(normalized_value)
+    original_ranges = tuple(
+        (boundaries[start], boundaries[end])
+        for start, end in normalized_ranges
+    )
+    return _replace_ranges(value, original_ranges)
 
 
 def _replace_inline_code(match: re.Match[str]) -> str:
@@ -129,50 +173,87 @@ def _append_fragment(
     fragments.append(fragment)
 
 
+def _find_closing_delimiter(
+    value: str, opening: int, opening_char: str, closing_char: str
+) -> int | None:
+    depth = 0
+    for index in range(opening, len(value)):
+        char = value[index]
+        if char == opening_char:
+            depth += 1
+        elif char == closing_char:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _find_markdown_container(
+    value: str, cursor: int
+) -> _MarkdownContainer | None:
+    search_from = cursor
+    while (opening := value.find("[", search_from)) >= 0:
+        is_image = opening > cursor and value[opening - 1] == "!"
+        start = opening - 1 if is_image else opening
+        closing = _find_closing_delimiter(value, opening, "[", "]")
+        if closing is None or closing + 1 >= len(value):
+            search_from = opening + 1
+            continue
+        destination_opening = closing + 1
+        if value[destination_opening] != "(":
+            search_from = opening + 1
+            continue
+        destination_closing = _find_closing_delimiter(
+            value, destination_opening, "(", ")"
+        )
+        if destination_closing is None:
+            search_from = opening + 1
+            continue
+        return _MarkdownContainer(
+            "image" if is_image else "link",
+            start,
+            destination_closing + 1,
+            value[opening + 1 : closing],
+        )
+    return None
+
+
 def _parse_text_fragments(value: str) -> tuple[_TextFragment, ...]:
     fragments: list[_TextFragment] = []
     cursor = 0
     while cursor < len(value):
-        candidates = (
-            ("image", 0, _IMAGE_RE.search(value, cursor)),
-            ("link", 1, _MARKDOWN_LINK_RE.search(value, cursor)),
-            ("inline", 2, _INLINE_CODE_RE.search(value, cursor)),
-        )
-        available = [candidate for candidate in candidates if candidate[2]]
-        if not available:
+        container = _find_markdown_container(value, cursor)
+        inline = _INLINE_CODE_RE.search(value, cursor)
+        if container is None and inline is None:
             _append_fragment(fragments, _OrdinaryFragment(value[cursor:]))
             break
 
-        kind, _, match = min(
-            available,
-            key=lambda candidate: (
-                candidate[2].start()
-                if candidate[2] is not None
-                else len(value),
-                candidate[1],
-            ),
+        container_is_next = container is not None and (
+            inline is None or container.start < inline.start()
         )
-        assert match is not None
+        match_start = container.start if container_is_next else inline.start()
         _append_fragment(
-            fragments, _OrdinaryFragment(value[cursor : match.start()])
+            fragments, _OrdinaryFragment(value[cursor:match_start])
         )
 
-        if kind == "inline":
-            label = _inline_label(match)
+        if not container_is_next:
+            assert inline is not None
+            label = _inline_label(inline)
             _append_fragment(
                 fragments,
                 _LabelFragment(label) if label is not None else _CodeFragment(),
             )
+            cursor = inline.end()
         else:
-            visible_text = match.group(1)
-            for fragment in _parse_text_fragments(visible_text):
+            assert container is not None
+            for fragment in _parse_text_fragments(container.visible_text):
                 _append_fragment(fragments, fragment)
-            descriptor = "图片" if kind == "image" else "链接"
-            prefix = " " if visible_text else ""
+            descriptor = "图片" if container.kind == "image" else "链接"
+            prefix = " " if container.visible_text else ""
             _append_fragment(
                 fragments, _OrdinaryFragment(prefix + descriptor)
             )
-        cursor = match.end()
+            cursor = container.end
 
     return tuple(fragments)
 
@@ -193,7 +274,7 @@ def _normalize_ordinary_text(value: str) -> str:
 
 
 def normalize_full_text(value: str) -> str:
-    text = _replace_fenced_code(value)
+    text = _replace_fenced_code_before_fragmenting(value)
     fragments = _parse_text_fragments(text)
     rendered = (
         _normalize_ordinary_text(fragment.value)

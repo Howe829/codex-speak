@@ -110,6 +110,15 @@ class RenderTests(unittest.TestCase):
         body = "前文 ``x = `tick` `` 后文"
         self.assertEqual(normalize_full_text(body), "前文 代码 后文")
 
+    def test_control_obscured_fences_hide_all_inline_content(self) -> None:
+        cases = (
+            "\u200b```python\nsecret `Full`\n```\nafter",
+            "\u200b```python\nsecret `x=1`\n```\nafter",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), "代码块 after")
+
     def test_preserves_short_prose_labels_in_single_backticks(self) -> None:
         body = "模式为 `Full`、`Summary`、`codex-speak`、`语音模式` 和 `two words`。"
         self.assertEqual(
@@ -172,6 +181,9 @@ class RenderTests(unittest.TestCase):
         cases = {
             "[see `Full`](https://example.com)": "see Full 链接",
             "![mode `Full`](/private/mode.png)": "mode Full 图片",
+            "[![mode `Full`](/private/mode.png)](https://example.com)": (
+                "mode Full 图片 链接"
+            ),
         }
         for body, expected in cases.items():
             with self.subTest(body=body):
