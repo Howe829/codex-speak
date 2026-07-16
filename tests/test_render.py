@@ -62,6 +62,25 @@ class RenderTests(unittest.TestCase):
         self.assertIn("进度", normalized)
         self.assertIn("A ✅", normalized)
 
+    def test_removes_double_quote_delimiters_without_dropping_content(self) -> None:
+        body = "新增内部心跳，watchdog 现在能区分“现场断流”和“转写进程卡死”。"
+        self.assertEqual(
+            normalize_full_text(body),
+            "新增内部心跳，watchdog 现在能区分现场断流和转写进程卡死。",
+        )
+
+    def test_removes_supported_double_quotes_but_keeps_single_quotes(self) -> None:
+        cases = {
+            '前文 "ASCII label" 后文': "前文 ASCII label 后文",
+            "前文 „low quote‟ 后文": "前文 low quote 后文",
+            "前文 ＂全角内容＂ 后文": "前文 全角内容 后文",
+            "前文 'single quote' 后文": "前文 'single quote' 后文",
+            "前文 “unbalanced 后文": "前文 unbalanced 后文",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
     def test_fenced_code_and_image_alt_use_exact_spoken_placeholders(self) -> None:
         body = "![订单截图](/private/order.png)\n```python\nsecret = 1\n```"
         self.assertEqual(normalize_full_text(body), "订单截图 图片 代码块")

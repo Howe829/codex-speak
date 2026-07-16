@@ -33,6 +33,9 @@ _MARKDOWN_LINE_PREFIX_RE = re.compile(
 _EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
 _WHITESPACE_RE = re.compile(r"\s+")
 _SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？.!?")
+_DOUBLE_QUOTE_TRANSLATION: Final[dict[int, None]] = str.maketrans(
+    "", "", '\"“”„‟＂'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +78,7 @@ def _replace_fenced_code(value: str) -> str:
 def normalize_full_text(value: str) -> str:
     text = _remove_unicode_controls(value)
     text = _replace_fenced_code(text)
+    text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
     text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
     text = _INLINE_CODE_RE.sub("代码", text)
