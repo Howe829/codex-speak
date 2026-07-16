@@ -48,6 +48,7 @@ class SpeechPayload:
 @dataclass(frozen=True, slots=True)
 class _OrdinaryFragment:
     value: str
+    starts_at_line_start: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,10 +116,6 @@ def _replace_ranges(
     return "".join(parts)
 
 
-def _replace_fenced_code(value: str) -> str:
-    return _replace_ranges(value, _fenced_code_ranges(value))
-
-
 def _replace_fenced_code_before_fragmenting(value: str) -> str:
     normalized_chars: list[str] = []
     boundaries = [0]
@@ -168,7 +165,10 @@ def _append_fragment(
     ):
         previous = fragments[-1]
         assert isinstance(previous, _OrdinaryFragment)
-        fragments[-1] = _OrdinaryFragment(previous.value + fragment.value)
+        fragments[-1] = _OrdinaryFragment(
+            previous.value + fragment.value,
+            previous.starts_at_line_start,
+        )
         return
     fragments.append(fragment)
 
@@ -218,14 +218,34 @@ def _find_markdown_container(
     return None
 
 
-def _parse_text_fragments(value: str) -> tuple[_TextFragment, ...]:
+def _starts_at_line_start(
+    value: str, index: int, value_starts_at_line_start: bool
+) -> bool:
+    return (
+        value_starts_at_line_start
+        if index == 0
+        else value[index - 1] in {"\r", "\n"}
+    )
+
+
+def _parse_text_fragments(
+    value: str, *, starts_at_line_start: bool = True
+) -> tuple[_TextFragment, ...]:
     fragments: list[_TextFragment] = []
     cursor = 0
     while cursor < len(value):
         container = _find_markdown_container(value, cursor)
         inline = _INLINE_CODE_RE.search(value, cursor)
         if container is None and inline is None:
-            _append_fragment(fragments, _OrdinaryFragment(value[cursor:]))
+            _append_fragment(
+                fragments,
+                _OrdinaryFragment(
+                    value[cursor:],
+                    _starts_at_line_start(
+                        value, cursor, starts_at_line_start
+                    ),
+                ),
+            )
             break
 
         container_is_next = container is not None and (
@@ -233,7 +253,11 @@ def _parse_text_fragments(value: str) -> tuple[_TextFragment, ...]:
         )
         match_start = container.start if container_is_next else inline.start()
         _append_fragment(
-            fragments, _OrdinaryFragment(value[cursor:match_start])
+            fragments,
+            _OrdinaryFragment(
+                value[cursor:match_start],
+                _starts_at_line_start(value, cursor, starts_at_line_start),
+            ),
         )
 
         if not container_is_next:
@@ -246,28 +270,46 @@ def _parse_text_fragments(value: str) -> tuple[_TextFragment, ...]:
             cursor = inline.end()
         else:
             assert container is not None
-            for fragment in _parse_text_fragments(container.visible_text):
+            for fragment in _parse_text_fragments(
+                container.visible_text, starts_at_line_start=False
+            ):
                 _append_fragment(fragments, fragment)
             descriptor = "图片" if container.kind == "image" else "链接"
             prefix = " " if container.visible_text else ""
             _append_fragment(
-                fragments, _OrdinaryFragment(prefix + descriptor)
+                fragments, _OrdinaryFragment(prefix + descriptor, False)
             )
             cursor = container.end
 
     return tuple(fragments)
 
 
-def _normalize_ordinary_text(value: str) -> str:
+def _remove_at_source_line_starts(
+    pattern: re.Pattern[str], value: str, starts_at_line_start: bool
+) -> str:
+    return pattern.sub(
+        lambda match: ""
+        if starts_at_line_start or match.start() > 0
+        else match.group(0),
+        value,
+    )
+
+
+def _normalize_ordinary_text(
+    value: str, *, starts_at_line_start: bool
+) -> str:
     text = _remove_unicode_controls(value)
-    text = _replace_fenced_code(text)
     text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
     text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
-    text = _TABLE_SEPARATOR_RE.sub("", text)
-    text = _MARKDOWN_LINE_PREFIX_RE.sub("", text)
+    text = _remove_at_source_line_starts(
+        _TABLE_SEPARATOR_RE, text, starts_at_line_start
+    )
+    text = _remove_at_source_line_starts(
+        _MARKDOWN_LINE_PREFIX_RE, text, starts_at_line_start
+    )
     text = text.replace("|", " ")
     text = _EMPHASIS_RE.sub("", text)
     return _WHITESPACE_RE.sub(" ", text)
@@ -277,7 +319,10 @@ def normalize_full_text(value: str) -> str:
     text = _replace_fenced_code_before_fragmenting(value)
     fragments = _parse_text_fragments(text)
     rendered = (
-        _normalize_ordinary_text(fragment.value)
+        _normalize_ordinary_text(
+            fragment.value,
+            starts_at_line_start=fragment.starts_at_line_start,
+        )
         if isinstance(fragment, _OrdinaryFragment)
         else fragment.value
         if isinstance(fragment, _LabelFragment)

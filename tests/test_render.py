@@ -207,6 +207,30 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
+    def test_fragment_starts_do_not_become_source_line_starts(self) -> None:
+        cases = {
+            "`A`- outside": "A- outside",
+            "`A` # heading": "A # heading",
+            "`A`| --- | --- |": "A --- ---",
+            "`A` ```python\nbody\n```\nafter": (
+                "A ```python body ``` after"
+            ),
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_true_line_starts_keep_anchored_normalization(self) -> None:
+        cases = {
+            "`A`\n\u200b- outside": "A outside",
+            "`A`\n\u200b# heading": "A heading",
+            "`A`\n\u200b| --- | --- |": "A",
+            "`A`\n\u200b```python\nbody\n```\nafter": "A 代码块 after",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
     def test_replaces_complete_home_relative_path(self) -> None:
         body = "查看 ~/secret/file.txt 获取详情"
         self.assertEqual(normalize_full_text(body), "查看 相关文件 获取详情")
