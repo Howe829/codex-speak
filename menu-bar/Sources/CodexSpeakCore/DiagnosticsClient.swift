@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DiagnosticsClient: Sendable {
+public struct DiagnosticsClient: PlaybackRecording, Sendable {
     private let pluginRoot: URL
     private let dataDirectory: URL
     private let pythonExecutableURL: URL

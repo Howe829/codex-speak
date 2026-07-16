@@ -1,6 +1,6 @@
 import Foundation
 
-public actor SpeechPlayer {
+public actor SpeechPlayer: SpeechPlaying {
     private let launcher: any ProcessLaunching
     private let sayExecutableURL: URL
     private let clock: @Sendable () -> UInt64
