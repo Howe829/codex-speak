@@ -189,6 +189,31 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
+    def test_deep_containers_complete_without_internal_exceptions(self) -> None:
+        depth = 1200
+        body = "`Full` `x=1`"
+        descriptors: list[str] = []
+        for index in range(depth):
+            if index % 2:
+                body = f"![{body}](/s)"
+                descriptors.append("图片")
+            else:
+                body = f"[{body}](/s)"
+                descriptors.append("链接")
+
+        try:
+            normalized = normalize_full_text(body)
+        except RecursionError as error:
+            self.fail(f"deep container parsing recursed: {error}")
+
+        self.assertEqual(
+            normalized,
+            "Full 代码 " + " ".join(descriptors),
+        )
+        self.assertNotIn("/s", normalized)
+        self.assertNotIn("x=1", normalized)
+        self.assertNotIn("\ue000", normalized)
+
     def test_reassembles_multiple_labels_without_internal_artifacts(self) -> None:
         normalized = normalize_full_text("`A` `B`_0_`C`")
         self.assertEqual(normalized, "A B0C")

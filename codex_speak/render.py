@@ -72,6 +72,21 @@ class _MarkdownContainer:
     visible_text: str
 
 
+@dataclass(frozen=True, slots=True)
+class _FragmentScan:
+    value: str
+    cursor: int
+    starts_at_line_start: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _FragmentEmission:
+    fragment: _TextFragment
+
+
+_FragmentWork = _FragmentScan | _FragmentEmission
+
+
 def _normalize_unicode_char(char: str) -> str:
     return (
         "\n"
@@ -232,54 +247,80 @@ def _parse_text_fragments(
     value: str, *, starts_at_line_start: bool = True
 ) -> tuple[_TextFragment, ...]:
     fragments: list[_TextFragment] = []
-    cursor = 0
-    while cursor < len(value):
-        container = _find_markdown_container(value, cursor)
-        inline = _INLINE_CODE_RE.search(value, cursor)
-        if container is None and inline is None:
+    work: list[_FragmentWork] = [
+        _FragmentScan(value, 0, starts_at_line_start)
+    ]
+    while work:
+        task = work.pop()
+        if isinstance(task, _FragmentEmission):
+            _append_fragment(fragments, task.fragment)
+            continue
+
+        cursor = task.cursor
+        while cursor < len(task.value):
+            container = _find_markdown_container(task.value, cursor)
+            inline = _INLINE_CODE_RE.search(task.value, cursor)
+            if container is None and inline is None:
+                _append_fragment(
+                    fragments,
+                    _OrdinaryFragment(
+                        task.value[cursor:],
+                        _starts_at_line_start(
+                            task.value,
+                            cursor,
+                            task.starts_at_line_start,
+                        ),
+                    ),
+                )
+                break
+
+            container_is_next = container is not None and (
+                inline is None or container.start < inline.start()
+            )
+            match_start = (
+                container.start if container_is_next else inline.start()
+            )
             _append_fragment(
                 fragments,
                 _OrdinaryFragment(
-                    value[cursor:],
+                    task.value[cursor:match_start],
                     _starts_at_line_start(
-                        value, cursor, starts_at_line_start
+                        task.value,
+                        cursor,
+                        task.starts_at_line_start,
                     ),
                 ),
             )
-            break
 
-        container_is_next = container is not None and (
-            inline is None or container.start < inline.start()
-        )
-        match_start = container.start if container_is_next else inline.start()
-        _append_fragment(
-            fragments,
-            _OrdinaryFragment(
-                value[cursor:match_start],
-                _starts_at_line_start(value, cursor, starts_at_line_start),
-            ),
-        )
+            if not container_is_next:
+                assert inline is not None
+                label = _inline_label(inline)
+                _append_fragment(
+                    fragments,
+                    _LabelFragment(label)
+                    if label is not None
+                    else _CodeFragment(),
+                )
+                cursor = inline.end()
+                continue
 
-        if not container_is_next:
-            assert inline is not None
-            label = _inline_label(inline)
-            _append_fragment(
-                fragments,
-                _LabelFragment(label) if label is not None else _CodeFragment(),
-            )
-            cursor = inline.end()
-        else:
             assert container is not None
-            for fragment in _parse_text_fragments(
-                container.visible_text, starts_at_line_start=False
-            ):
-                _append_fragment(fragments, fragment)
             descriptor = "图片" if container.kind == "image" else "链接"
             prefix = " " if container.visible_text else ""
-            _append_fragment(
-                fragments, _OrdinaryFragment(prefix + descriptor, False)
+            work.extend(
+                (
+                    _FragmentScan(
+                        task.value,
+                        container.end,
+                        task.starts_at_line_start,
+                    ),
+                    _FragmentEmission(
+                        _OrdinaryFragment(prefix + descriptor, False)
+                    ),
+                    _FragmentScan(container.visible_text, 0, False),
+                )
             )
-            cursor = container.end
+            break
 
     return tuple(fragments)
 
