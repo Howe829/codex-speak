@@ -197,6 +197,57 @@ final class SpeechCoordinatorTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "clear"])
     }
 
+    func testAudibleReadbackFailureTrustsSuccessfullyPersistedRequestedMode() async {
+        let log = OrderedLog()
+        let control = ControlSpy(log: log, getActions: [.failure])
+        let player = SpeechPlayingSpy(log: log)
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: PlaybackRecordingSpy()
+        )
+
+        let result = await coordinator.selectMode(.full)
+        let selectedMode = await coordinator.selectedMode
+
+        XCTAssertEqual(result, .readFailed(.full))
+        XCTAssertEqual(selectedMode, .full)
+        XCTAssertEqual(control.persistedMode, .full)
+        XCTAssertEqual(player.stopCount, 0)
+        XCTAssertEqual(control.clearCount, 0)
+    }
+
+    func testAudibleReadbackFailureSupersedesSuspendedSilentCleanup() async {
+        let log = OrderedLog()
+        let control = ControlSpy(
+            log: log,
+            getActions: [.mode(.silent), .failure],
+            setActions: [.succeed, .succeed]
+        )
+        let player = SuspendingSpeechPlayingSpy(log: log)
+        let diagnostics = PlaybackRecordingSpy()
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: diagnostics
+        )
+
+        let silentSelection = Task { await coordinator.selectMode(.silent) }
+        await player.waitUntilStopSuspends()
+        let failedReadbackResult = await coordinator.selectMode(.full)
+        await player.releaseStop()
+        let supersededSilentResult = await silentSelection.value
+        let selectedMode = await coordinator.selectedMode
+
+        XCTAssertEqual(failedReadbackResult, .readFailed(.full))
+        XCTAssertEqual(supersededSilentResult, .applied(.full))
+        XCTAssertEqual(selectedMode, .full)
+        XCTAssertEqual(control.persistedMode, .full)
+        XCTAssertEqual(control.clearCount, 0)
+        XCTAssertTrue(diagnostics.controlFailures.isEmpty)
+        XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "get"])
+    }
+
     func testStartupSilentClearsBeforeReturningForBridgeStart() async throws {
         let log = OrderedLog()
         let control = ControlSpy(log: log, getActions: [.mode(.silent)])

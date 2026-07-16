@@ -16,6 +16,8 @@
 - Speech payloads, queue envelopes, bridge events, playback diagnostics, and render modes remain Summary/Full-only; forged `mode: silent` speech events are rejected.
 - Selecting Silent persists first, then stops current speech, then clears pending entries; write failure preserves playback and the prior mode.
 - A successful Silent write followed by readback failure fails safe to local Silent and still performs stop/clear; a successful readback of another trusted mode adopts that mode without Silent side effects.
+- A successful Summary/Full write immediately becomes the trusted local selection; successful readback may replace it, while readback failure keeps the requested mode and returns `.readFailed(requestedMode)` for Task 5 to show `Could not read speech mode`.
+- Only a successfully persisted later selection supersedes suspended Silent cleanup. A later write failure does not supersede it; a later audible write does, even if its readback fails.
 - Silent startup clears pending entries before bridge consumption; claimed native events and fallback events re-check persisted mode immediately before playback.
 - Returning to Summary or Full never replays events discarded while Silent was active.
 - Silent diagnostics contain fixed metadata only and do not change the diagnostic schema.
@@ -448,6 +450,22 @@ func testQueueClearFailureLeavesSilentActiveAndRecordsFixedFailure() async {
     // clearPending throws. Assert .appliedWithQueueClearFailure(.silent), one stop,
     // one recordControlFailure(.queueClearFailed), and no speech string in spy metadata.
 }
+
+func testAudibleReadbackFailureTrustsSuccessfullyPersistedRequestedMode() async {
+    // setMode(.full) succeeds and getMode() throws. Assert .readFailed(.full),
+    // selectedMode and persisted mode remain full, with no Silent side effects.
+}
+
+func testAudibleReadbackFailureSupersedesSuspendedSilentCleanup() async {
+    // Suspend Silent in stopCurrent, then persist Full and fail its readback.
+    // Assert Full returns .readFailed(.full), stale Silent returns .applied(.full),
+    // and no stale clear or queue-clear diagnostic occurs.
+}
+
+func testFailedAudibleWriteDoesNotSupersedeSuspendedSilentCleanup() async {
+    // Suspend a confirmed Silent selection, then fail setMode(.full).
+    // Assert Silent still clears once and completes as .applied(.silent).
+}
 ```
 
 - [ ] **Step 2: Write startup and claimed-event tests**
@@ -501,6 +519,7 @@ public enum ModeSelectionResult: Equatable, Sendable {
     case applied(SpeechMode)
     case appliedWithQueueClearFailure(SpeechMode)
     case writeFailed(SpeechMode)
+    case readFailed(SpeechMode)
     case readFailedFailSafe(queueClearFailed: Bool)
 }
 
@@ -517,6 +536,8 @@ public actor SpeechCoordinator {
     private let controlClient: any ControlClientProtocol
     private let speechPlayer: any SpeechPlaying
     private let diagnosticsClient: any PlaybackRecording
+    private var modeSelectionRequestGeneration: UInt64 = 0
+    private var latestSuccessfullyPersistedSelectionGeneration: UInt64 = 0
     public private(set) var selectedMode = SpeechMode.summary
 
     public init(
@@ -542,17 +563,20 @@ public func refreshForStartup() throws -> StartupModeResult {
 }
 
 public func selectMode(_ requestedMode: SpeechMode) async -> ModeSelectionResult {
+    modeSelectionRequestGeneration &+= 1
+    let selectionGeneration = modeSelectionRequestGeneration
     let priorMode = selectedMode
     do { try controlClient.setMode(requestedMode) }
     catch { return .writeFailed(priorMode) }
+    latestSuccessfullyPersistedSelectionGeneration = selectionGeneration
 
     if requestedMode != .silent {
+        selectedMode = requestedMode
         do {
             selectedMode = try controlClient.getMode()
             return .applied(selectedMode)
         } catch {
-            selectedMode = priorMode
-            return .writeFailed(priorMode)
+            return .readFailed(requestedMode)
         }
     }
 
@@ -562,13 +586,25 @@ public func selectMode(_ requestedMode: SpeechMode) async -> ModeSelectionResult
         guard confirmedMode == .silent else { return .applied(confirmedMode) }
     } catch {
         selectedMode = .silent
-        return await stopAndClear(readbackFailed: true)
+        return await stopAndClear(
+            readbackFailed: true,
+            selectionGeneration: selectionGeneration
+        )
     }
-    return await stopAndClear(readbackFailed: false)
+    return await stopAndClear(
+        readbackFailed: false,
+        selectionGeneration: selectionGeneration
+    )
 }
 
-private func stopAndClear(readbackFailed: Bool) async -> ModeSelectionResult {
+private func stopAndClear(
+    readbackFailed: Bool,
+    selectionGeneration: UInt64
+) async -> ModeSelectionResult {
     await speechPlayer.stopCurrent()
+    guard selectionGeneration == latestSuccessfullyPersistedSelectionGeneration else {
+        return .applied(selectedMode)
+    }
     do {
         _ = try controlClient.clearPending()
         return readbackFailed ? .readFailedFailSafe(queueClearFailed: false) : .applied(.silent)
@@ -692,7 +728,7 @@ private func selectMode(_ requestedMode: SpeechMode) {
             showLocalError("Could not clear pending speeches")
         case .writeFailed:
             showLocalError("Could not change speech mode")
-        case .readFailedFailSafe:
+        case .readFailed, .readFailedFailSafe:
             showLocalError("Could not read speech mode")
         }
     }
@@ -707,7 +743,7 @@ private func updateCheckmarks() {
 
 Replace direct event playback with `try await coordinator.handle(event:)`. In `start()`, call `refreshForStartup()` and apply its returned mode before creating `bridgeTask`; if it returns `.readyWithQueueClearFailure`, show the fixed queue-clear error but still start the bridge. Keep the manual Stop and Clear items delegating to the existing player/control operations.
 
-For a claimed-event handling error, keep the bridge alive, acknowledge the event through the existing handler return, and show `Could not record playback result`; never retry or replay that claimed event. A Silent readback failure always shows `Could not read speech mode`; if queue clearing also fails, its fixed `queue_clear_failed` diagnostic remains the additional evidence without replacing the read error.
+For a claimed-event handling error, keep the bridge alive, acknowledge the event through the existing handler return, and show `Could not record playback result`; never retry or replay that claimed event. Both `.readFailed(requestedMode)` for Summary/Full and `.readFailedFailSafe` for Silent show `Could not read speech mode`. If Silent queue clearing also fails, its fixed `queue_clear_failed` diagnostic remains the additional evidence without replacing the read error.
 
 - [ ] **Step 4: Run menu, coordinator, packaging, and privacy tests**
 

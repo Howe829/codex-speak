@@ -12,6 +12,7 @@ public enum ModeSelectionResult: Equatable, Sendable {
     case applied(SpeechMode)
     case appliedWithQueueClearFailure(SpeechMode)
     case writeFailed(SpeechMode)
+    case readFailed(SpeechMode)
     case readFailedFailSafe(queueClearFailed: Bool)
 }
 
@@ -62,12 +63,12 @@ public actor SpeechCoordinator {
         latestSuccessfullyPersistedSelectionGeneration = selectionGeneration
 
         if requestedMode != .silent {
+            selectedMode = requestedMode
             do {
                 selectedMode = try controlClient.getMode()
                 return .applied(selectedMode)
             } catch {
-                selectedMode = priorMode
-                return .writeFailed(priorMode)
+                return .readFailed(requestedMode)
             }
         }
 

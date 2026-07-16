@@ -47,13 +47,13 @@ If the persistence command fails, the menu restores its prior selected mode,
 leaves current playback and pending events unchanged, and shows the existing
 local mode-change error.
 
-If persistence succeeds but readback fails, the menu fails safe to Silent,
-stops and clears speech, and shows the read error. A successful persistence
-write is sufficient evidence that future hooks may already be suppressing
-events; continuing to play would violate the requested behavior. If readback
-succeeds with a different mode because another trusted control changed it
-concurrently, the menu adopts that returned mode and does not run Silent's
-stop-and-clear side effects.
+For a Silent selection, if persistence succeeds but readback fails, the menu
+fails safe to Silent, stops and clears speech, and shows the read error. A
+successful persistence write is sufficient evidence that future hooks may
+already be suppressing events; continuing to play would violate the requested
+behavior. If readback succeeds with a different mode because another trusted
+control changed it concurrently, the menu adopts that returned mode and does
+not run Silent's stop-and-clear side effects.
 
 Current-speech cancellation is best effort and queue clearing may report a
 failure after Silent is active. The mode remains Silent and the helper shows a
@@ -61,8 +61,18 @@ local error for the queue failure. The playback and fallback guards described
 below still prevent a newly claimed event from starting. Existing fixed,
 metadata-only diagnostics remain the only persisted error evidence.
 
-Selecting Summary or Full changes only the persisted mode and checkmarks. It
-does not replay events discarded while Silent was active.
+Selecting Summary or Full changes only the persisted mode and checkmarks. A
+successful write immediately makes the requested audible mode the trusted
+local selection. A successful readback may replace it with the returned
+trusted mode; if readback fails, the requested mode remains selected and the
+menu shows `Could not read speech mode` rather than treating the successful
+write as a write failure or restoring the prior mode. The successful audible
+write supersedes any older Silent stop-and-clear continuation, so that stale
+continuation must not clear the queue or record a queue-clear diagnostic. It
+returns a result consistent with the current trusted selection. A failed
+audible write does not supersede an older successfully persisted selection.
+Returning to Summary or Full does not replay events discarded while Silent was
+active.
 
 ## Event suppression
 
@@ -141,8 +151,12 @@ Swift tests cover:
 - Successful Silent selection persists first, stops current speech, and clears
   pending events.
 - A persistence failure keeps the prior mode and does not stop or clear.
-- A readback failure after successful persistence fails safe to Silent, stops
-  current speech, clears pending work, and reports the read error.
+- A Silent readback failure after successful persistence fails safe to Silent,
+  stops current speech, clears pending work, and reports the read error.
+- A Summary/Full write followed by readback failure keeps the successfully
+  persisted requested mode selected and reports the distinct read error.
+- A successfully persisted audible selection supersedes a suspended Silent
+  cleanup even when audible readback fails; a failed audible write does not.
 - A queue-clear failure leaves Silent active and reports a fixed local error.
 - A claimed event is acknowledged without playback when Silent is selected.
 - Startup Silent mode clears pending work before bridge consumption.
