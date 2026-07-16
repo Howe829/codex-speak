@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 import re
 import unicodedata
@@ -14,8 +15,6 @@ MAX_SEGMENT_CHARS: Final[int] = 600
 _FENCE_OPEN_RE = re.compile(
     r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*(?:\r?\n|\Z)"
 )
-_IMAGE_RE = re.compile(r"!\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
-_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _INLINE_CODE_RE = re.compile(
     r"(?<!`)(?P<ticks>`+)(?!`)(?P<content>[^\r\n]*?)(?<!`)(?P=ticks)(?!`)"
 )
@@ -73,10 +72,17 @@ class _MarkdownContainer:
 
 
 @dataclass(frozen=True, slots=True)
+class _MarkdownContainerIndex:
+    openings: tuple[int, ...]
+    containers: tuple[_MarkdownContainer, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _FragmentScan:
     value: str
     cursor: int
     starts_at_line_start: bool
+    container_index: _MarkdownContainerIndex
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +91,21 @@ class _FragmentEmission:
 
 
 _FragmentWork = _FragmentScan | _FragmentEmission
+
+
+@dataclass(frozen=True, slots=True)
+class _PlainContainerScan:
+    value: str
+    cursor: int
+    container_index: _MarkdownContainerIndex
+
+
+@dataclass(frozen=True, slots=True)
+class _PlainContainerEmission:
+    value: str
+
+
+_PlainContainerWork = _PlainContainerScan | _PlainContainerEmission
 
 
 def _normalize_unicode_char(char: str) -> str:
@@ -188,49 +209,122 @@ def _append_fragment(
     fragments.append(fragment)
 
 
-def _find_closing_delimiter(
-    value: str, opening: int, opening_char: str, closing_char: str
-) -> int | None:
-    depth = 0
-    for index in range(opening, len(value)):
-        char = value[index]
-        if char == opening_char:
-            depth += 1
-        elif char == closing_char:
-            depth -= 1
-            if depth == 0:
-                return index
-    return None
+def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
+    bracket_stack: list[int] = []
+    parenthesis_stack: list[int] = []
+    bracket_openings: list[int] = []
+    bracket_closings: dict[int, int] = {}
+    parenthesis_closings: dict[int, int] = {}
+    escaped_indices: set[int] = set()
+    escaped = False
+
+    for index, char in enumerate(value):
+        if escaped:
+            escaped_indices.add(index)
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "[":
+            bracket_stack.append(index)
+            bracket_openings.append(index)
+        elif char == "]" and bracket_stack:
+            bracket_closings[bracket_stack.pop()] = index
+        elif char == "(":
+            parenthesis_stack.append(index)
+        elif char == ")" and parenthesis_stack:
+            parenthesis_closings[parenthesis_stack.pop()] = index
+
+    openings: list[int] = []
+    containers: list[_MarkdownContainer] = []
+    for opening in bracket_openings:
+        closing = bracket_closings.get(opening)
+        if closing is None:
+            continue
+        destination_opening = closing + 1
+        if (
+            destination_opening >= len(value)
+            or value[destination_opening] != "("
+            or destination_opening in escaped_indices
+        ):
+            continue
+        destination_closing = parenthesis_closings.get(
+            destination_opening
+        )
+        if destination_closing is None:
+            continue
+        is_image = (
+            opening > 0
+            and value[opening - 1] == "!"
+            and opening - 1 not in escaped_indices
+        )
+        openings.append(opening)
+        containers.append(
+            _MarkdownContainer(
+                "image" if is_image else "link",
+                opening - 1 if is_image else opening,
+                destination_closing + 1,
+                value[opening + 1 : closing],
+            )
+        )
+    return _MarkdownContainerIndex(tuple(openings), tuple(containers))
 
 
 def _find_markdown_container(
-    value: str, cursor: int
+    index: _MarkdownContainerIndex, cursor: int
 ) -> _MarkdownContainer | None:
-    search_from = cursor
-    while (opening := value.find("[", search_from)) >= 0:
-        is_image = opening > cursor and value[opening - 1] == "!"
-        start = opening - 1 if is_image else opening
-        closing = _find_closing_delimiter(value, opening, "[", "]")
-        if closing is None or closing + 1 >= len(value):
-            search_from = opening + 1
-            continue
-        destination_opening = closing + 1
-        if value[destination_opening] != "(":
-            search_from = opening + 1
-            continue
-        destination_closing = _find_closing_delimiter(
-            value, destination_opening, "(", ")"
+    position = bisect_left(index.openings, cursor)
+    return (
+        index.containers[position]
+        if position < len(index.containers)
+        else None
+    )
+
+
+def _replace_plain_markdown_containers(value: str) -> str:
+    parts: list[str] = []
+    work: list[_PlainContainerWork] = [
+        _PlainContainerScan(
+            value,
+            0,
+            _index_markdown_containers(value),
         )
-        if destination_closing is None:
-            search_from = opening + 1
+    ]
+    while work:
+        task = work.pop()
+        if isinstance(task, _PlainContainerEmission):
+            parts.append(task.value)
             continue
-        return _MarkdownContainer(
-            "image" if is_image else "link",
-            start,
-            destination_closing + 1,
-            value[opening + 1 : closing],
+
+        container = _find_markdown_container(
+            task.container_index, task.cursor
         )
-    return None
+        if container is None:
+            parts.append(task.value[task.cursor:])
+            continue
+
+        parts.append(task.value[task.cursor : container.start])
+        descriptor = "图片" if container.kind == "image" else "链接"
+        prefix = " " if container.visible_text else ""
+        work.extend(
+            (
+                _PlainContainerScan(
+                    task.value,
+                    container.end,
+                    task.container_index,
+                ),
+                _PlainContainerEmission(prefix + descriptor),
+                _PlainContainerScan(
+                    container.visible_text,
+                    0,
+                    _index_markdown_containers(
+                        container.visible_text
+                    ),
+                ),
+            )
+        )
+    return "".join(parts)
 
 
 def _starts_at_line_start(
@@ -248,7 +342,12 @@ def _parse_text_fragments(
 ) -> tuple[_TextFragment, ...]:
     fragments: list[_TextFragment] = []
     work: list[_FragmentWork] = [
-        _FragmentScan(value, 0, starts_at_line_start)
+        _FragmentScan(
+            value,
+            0,
+            starts_at_line_start,
+            _index_markdown_containers(value),
+        )
     ]
     while work:
         task = work.pop()
@@ -258,7 +357,9 @@ def _parse_text_fragments(
 
         cursor = task.cursor
         while cursor < len(task.value):
-            container = _find_markdown_container(task.value, cursor)
+            container = _find_markdown_container(
+                task.container_index, cursor
+            )
             inline = _INLINE_CODE_RE.search(task.value, cursor)
             if container is None and inline is None:
                 _append_fragment(
@@ -313,11 +414,19 @@ def _parse_text_fragments(
                         task.value,
                         container.end,
                         task.starts_at_line_start,
+                        task.container_index,
                     ),
                     _FragmentEmission(
                         _OrdinaryFragment(prefix + descriptor, False)
                     ),
-                    _FragmentScan(container.visible_text, 0, False),
+                    _FragmentScan(
+                        container.visible_text,
+                        0,
+                        False,
+                        _index_markdown_containers(
+                            container.visible_text
+                        ),
+                    ),
                 )
             )
             break
@@ -341,8 +450,7 @@ def _normalize_ordinary_text(
 ) -> str:
     text = _remove_unicode_controls(value)
     text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
-    text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
-    text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
+    text = _replace_plain_markdown_containers(text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
     text = _remove_at_source_line_starts(

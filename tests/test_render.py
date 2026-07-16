@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from codex_speak.protocol import ParsedResponse
@@ -188,6 +189,56 @@ class RenderTests(unittest.TestCase):
         for body, expected in cases.items():
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
+
+    def test_markdown_container_escapes_never_expose_destinations(self) -> None:
+        cases = (
+            (
+                r"[safe](https://host/path\)LINK_SECRET)",
+                "safe 链接",
+                ("https://", "LINK_SECRET"),
+            ),
+            (
+                r"[safe\] label](https://host/path\)LABEL_SECRET)",
+                r"safe\] label 链接",
+                ("https://", "LABEL_SECRET"),
+            ),
+            (
+                r"![safe\] image](/private/path\)IMAGE_SECRET.png)",
+                r"safe\] image 图片",
+                ("/private/", "IMAGE_SECRET"),
+            ),
+            (
+                r"[![safe\] nested](/private/in\)INNER_SECRET.png)]"
+                r"(https://host/out\)OUTER_SECRET)",
+                r"safe\] nested 图片 链接",
+                ("/private/", "https://", "INNER_SECRET", "OUTER_SECRET"),
+            ),
+        )
+        for body, expected, canaries in cases:
+            with self.subTest(body=body):
+                normalized = normalize_full_text(body)
+                self.assertEqual(normalized, expected)
+                for canary in canaries:
+                    self.assertNotIn(canary, normalized)
+
+    def test_control_obscured_container_keeps_destination_private(self) -> None:
+        body = "[safe]\u200b(https://host/path\\)CONTROL_SECRET)"
+
+        normalized = normalize_full_text(body)
+
+        self.assertEqual(normalized, "safe 链接")
+        self.assertNotIn("https://", normalized)
+        self.assertNotIn("CONTROL_SECRET", normalized)
+
+    def test_unmatched_markdown_delimiters_have_bounded_scan_time(self) -> None:
+        body = "[" * 20_000 + "(" * 20_000 + "public"
+
+        started = time.perf_counter()
+        normalized = normalize_full_text(body)
+        elapsed = time.perf_counter() - started
+
+        self.assertEqual(normalized, body)
+        self.assertLess(elapsed, 1.5)
 
     def test_deep_containers_complete_without_internal_exceptions(self) -> None:
         depth = 1200
