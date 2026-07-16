@@ -39,6 +39,10 @@ do not trust.
 
 The menu bar checkmark selects one speech mode:
 
+- `Silent` immediately stops current speech, clears pending speech, and
+  suppresses future events. The selection persists across restarts. Returning
+  to `Summary` or `Full` does not replay events discarded while Silent was
+  active; only new eligible events play.
 - `Summary` speaks only important `completed`, `blocked`, or
   `action_required` outcome text. Ordinary `silent` answers remain quiet.
 - `Full` reads the normalized visible response. Markdown formatting, code,
@@ -55,19 +59,20 @@ conversation preferences; the plugin does not hard-code a user's name.
 
 The default macOS voice and rate are used. `Plugin Toggle` in Codex controls the whole plugin,
 including both hooks and speech; it is not a mode selector.
-Use `Summary` or `Full` in the menu to change only the speech mode.
+Use `Silent`, `Summary`, or `Full` in the menu to change only the speech mode.
 The checkmark is refreshed from persisted settings whenever the menu opens, so
 changes made by another trusted local control are reflected before selection.
 
 ## Menu controls
 
-The helper has exactly five menu actions:
+The helper has exactly six menu actions:
 
-1. `Summary`
-2. `Full`
-3. `Stop Current Speech`
-4. `Clear Pending Speeches`
-5. `Quit Codex Speak`
+1. `Silent`
+2. `Summary`
+3. `Full`
+4. `Stop Current Speech`
+5. `Clear Pending Speeches`
+6. `Quit Codex Speak`
 
 These are context-free local controls: they act on playback and settings
 without submitting a prompt, mutating the current conversation, or requiring
@@ -192,6 +197,6 @@ Review changed definitions in `/hooks` and start a new thread afterward.
 - Ordinary answers are silent in Summary mode by design; select Full if the
   visible response should be read.
 - Quoted text or a short backtick label is skipped in Full mode: confirm the
-  installed plugin version begins with `0.2.2+codex.` and reinstall it if not.
+  installed plugin version begins with `0.2.3+codex.` and reinstall it if not.
 - Concurrent announcements are FIFO and play one at a time; use Clear Pending
   Speeches to discard the queue or Stop Current Speech to cancel playback.
