@@ -255,6 +255,36 @@ class RenderTests(unittest.TestCase):
                 for canary in canaries:
                     self.assertNotIn(canary, normalized)
 
+    def test_destination_backticks_do_not_mask_closing_parentheses(self) -> None:
+        cases = (
+            (
+                "[safe](LINK_SECRET`)`",
+                "safe 链接`",
+                ("LINK_SECRET",),
+            ),
+            (
+                "![safe](IMAGE_SECRET`)`",
+                "safe 图片`",
+                ("IMAGE_SECRET",),
+            ),
+            (
+                "[![safe](INNER_SECRET`)`](OUTER_SECRET)",
+                "safe 图片` 链接",
+                ("INNER_SECRET", "OUTER_SECRET"),
+            ),
+            (
+                "[![safe](INNER_SECRET)](OUTER_SECRET`)`",
+                "safe 图片 链接`",
+                ("INNER_SECRET", "OUTER_SECRET"),
+            ),
+        )
+        for body, expected, canaries in cases:
+            with self.subTest(body=body):
+                normalized = normalize_full_text(body)
+                self.assertEqual(normalized, expected)
+                for canary in canaries:
+                    self.assertNotIn(canary, normalized)
+
     def test_unmatched_markdown_delimiters_have_bounded_scan_time(self) -> None:
         body = "[" * 20_000 + "(" * 20_000 + "public"
 

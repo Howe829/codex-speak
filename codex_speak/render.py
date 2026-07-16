@@ -227,11 +227,12 @@ def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
     index = 0
 
     while index < len(value):
-        if inline is not None and index == inline.start():
-            index = inline.end()
+        while inline is not None and index >= inline.end():
             inline = next(inline_matches, None)
-            escaped = False
-            continue
+        inside_inline = (
+            inline is not None
+            and inline.start() <= index < inline.end()
+        )
         char = value[index]
         if escaped:
             escaped_indices.add(index)
@@ -242,12 +243,12 @@ def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
             escaped = True
             index += 1
             continue
-        if char == "[":
+        if char == "[" and not inside_inline:
             bracket_stack.append(index)
             bracket_openings.append(index)
-        elif char == "]" and bracket_stack:
+        elif char == "]" and not inside_inline and bracket_stack:
             bracket_closings[bracket_stack.pop()] = index
-        elif char == "(":
+        if char == "(":
             parenthesis_stack.append(index)
         elif char == ")" and parenthesis_stack:
             parenthesis_closings[parenthesis_stack.pop()] = index
