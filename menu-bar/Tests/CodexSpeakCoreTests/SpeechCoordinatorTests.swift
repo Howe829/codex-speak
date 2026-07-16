@@ -106,6 +106,66 @@ final class SpeechCoordinatorTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(diagnostics.metadata.joined().contains(canary))
     }
 
+    func testSupersededSilentSelectionDoesNotClearOrReportSilentApplied() async {
+        let log = OrderedLog()
+        let control = ControlSpy(
+            log: log,
+            getActions: [.mode(.silent), .mode(.full)]
+        )
+        let player = SuspendingSpeechPlayingSpy(log: log)
+        let diagnostics = PlaybackRecordingSpy()
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: diagnostics
+        )
+
+        let silentSelection = Task { await coordinator.selectMode(.silent) }
+        await player.waitUntilStopSuspends()
+        let fullResult = await coordinator.selectMode(.full)
+        await player.releaseStop()
+        let supersededSilentResult = await silentSelection.value
+        let selectedMode = await coordinator.selectedMode
+
+        XCTAssertEqual(fullResult, .applied(.full))
+        XCTAssertEqual(supersededSilentResult, .applied(.full))
+        XCTAssertEqual(selectedMode, .full)
+        XCTAssertEqual(control.persistedMode, .full)
+        XCTAssertEqual(control.clearCount, 0)
+        XCTAssertTrue(diagnostics.controlFailures.isEmpty)
+        XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "get"])
+    }
+
+    func testSupersededSilentReadbackFailureDoesNotClearOrRecordDiagnostic() async {
+        let log = OrderedLog()
+        let control = ControlSpy(
+            log: log,
+            getActions: [.failure, .mode(.full)]
+        )
+        let player = SuspendingSpeechPlayingSpy(log: log)
+        let diagnostics = PlaybackRecordingSpy()
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: diagnostics
+        )
+
+        let silentSelection = Task { await coordinator.selectMode(.silent) }
+        await player.waitUntilStopSuspends()
+        let fullResult = await coordinator.selectMode(.full)
+        await player.releaseStop()
+        let supersededSilentResult = await silentSelection.value
+        let selectedMode = await coordinator.selectedMode
+
+        XCTAssertEqual(fullResult, .applied(.full))
+        XCTAssertEqual(supersededSilentResult, .applied(.full))
+        XCTAssertEqual(selectedMode, .full)
+        XCTAssertEqual(control.persistedMode, .full)
+        XCTAssertEqual(control.clearCount, 0)
+        XCTAssertTrue(diagnostics.controlFailures.isEmpty)
+        XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "get"])
+    }
+
     func testStartupSilentClearsBeforeReturningForBridgeStart() async throws {
         let log = OrderedLog()
         let control = ControlSpy(log: log, getActions: [.mode(.silent)])
@@ -219,6 +279,7 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
     private let setError: Error?
     private let clearError: Error?
     private var clearCalls = 0
+    private var storedPersistedMode = SpeechMode.summary
 
     init(
         log: OrderedLog,
@@ -244,6 +305,7 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
     func setMode(_ mode: SpeechMode) throws {
         log.append("set:\(mode.rawValue)")
         if let setError { throw setError }
+        lock.withLock { storedPersistedMode = mode }
     }
 
     func clearPending() throws -> Int {
@@ -257,6 +319,10 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
 
     var clearCount: Int {
         lock.withLock { clearCalls }
+    }
+
+    var persistedMode: SpeechMode {
+        lock.withLock { storedPersistedMode }
     }
 }
 
@@ -293,6 +359,45 @@ private final class SpeechPlayingSpy: SpeechPlaying, @unchecked Sendable {
 
     var playCount: Int { lock.withLock { plays } }
     var stopCount: Int { lock.withLock { stops } }
+}
+
+private actor SuspendingSpeechPlayingSpy: SpeechPlaying {
+    private let log: OrderedLog
+    private var stopDidStart = false
+    private var stopContinuation: CheckedContinuation<Void, Never>?
+
+    init(log: OrderedLog) {
+        self.log = log
+    }
+
+    func play(event: SpeechEvent) async -> PlaybackResult {
+        PlaybackResult(
+            outcome: .spoken,
+            errorCode: nil,
+            completedSegmentCount: event.segments.count,
+            durationMilliseconds: 0
+        )
+    }
+
+    func stopCurrent() async {
+        log.append("stop")
+        stopDidStart = true
+        await withCheckedContinuation { continuation in
+            stopContinuation = continuation
+        }
+    }
+
+    func waitUntilStopSuspends() async {
+        while !stopDidStart {
+            await Task.yield()
+        }
+    }
+
+    func releaseStop() {
+        let continuation = stopContinuation
+        stopContinuation = nil
+        continuation?.resume()
+    }
 }
 
 private struct RecordedPlayback: Equatable {

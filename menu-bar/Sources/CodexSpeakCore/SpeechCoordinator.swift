@@ -24,6 +24,7 @@ public actor SpeechCoordinator {
     private let controlClient: any ControlClientProtocol
     private let speechPlayer: any SpeechPlaying
     private let diagnosticsClient: any PlaybackRecording
+    private var modeSelectionGeneration: UInt64 = 0
     public private(set) var selectedMode = SpeechMode.summary
 
     public init(
@@ -49,6 +50,8 @@ public actor SpeechCoordinator {
     }
 
     public func selectMode(_ requestedMode: SpeechMode) async -> ModeSelectionResult {
+        modeSelectionGeneration &+= 1
+        let selectionGeneration = modeSelectionGeneration
         let priorMode = selectedMode
         do {
             try controlClient.setMode(requestedMode)
@@ -72,13 +75,25 @@ public actor SpeechCoordinator {
             guard confirmedMode == .silent else { return .applied(confirmedMode) }
         } catch {
             selectedMode = .silent
-            return await stopAndClear(readbackFailed: true)
+            return await stopAndClear(
+                readbackFailed: true,
+                selectionGeneration: selectionGeneration
+            )
         }
-        return await stopAndClear(readbackFailed: false)
+        return await stopAndClear(
+            readbackFailed: false,
+            selectionGeneration: selectionGeneration
+        )
     }
 
-    private func stopAndClear(readbackFailed: Bool) async -> ModeSelectionResult {
+    private func stopAndClear(
+        readbackFailed: Bool,
+        selectionGeneration: UInt64
+    ) async -> ModeSelectionResult {
         await speechPlayer.stopCurrent()
+        guard selectionGeneration == modeSelectionGeneration else {
+            return .applied(selectedMode)
+        }
         do {
             _ = try controlClient.clearPending()
             return readbackFailed ? .readFailedFailSafe(queueClearFailed: false) : .applied(.silent)
