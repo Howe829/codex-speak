@@ -28,6 +28,7 @@ final class BridgeProcessTests: XCTestCase, @unchecked Sendable {
             #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed"}"#,
             #"{"type":"event","event_id":"0123456789ABCDEF01234567","mode":"full","status":"completed","segments":["ok"]}"#,
             #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"verbose","status":"completed","segments":["ok"]}"#,
+            #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"silent","status":"completed","segments":["must reject"]}"#,
             #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"summary","status":"silent","segments":["ok"]}"#,
             #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"private","segments":["ok"]}"#,
             #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"full","status":"completed","segments":[]}"#,
@@ -323,6 +324,25 @@ final class ControlAndDiagnosticsTests: XCTestCase {
         ])
         XCTAssertTrue(runner.requests.allSatisfy { $0.executableURL.path == "/custom/python" })
         XCTAssertTrue(runner.requests.allSatisfy { $0.currentDirectoryURL.path == "/plugin" })
+    }
+
+    func testControlClientAcceptsSilentWithoutMakingItAValidSpeechEventMode() throws {
+        let runner = RecordingCommandRunner(outputs: ["silent\n", "silent\n"])
+        let client = ControlClient(
+            pluginRoot: URL(fileURLWithPath: "/plugin"),
+            dataDirectory: URL(fileURLWithPath: "/data"),
+            pythonExecutableURL: URL(fileURLWithPath: "/custom/python"),
+            runner: runner
+        )
+        XCTAssertEqual(try client.getMode(), .silent)
+        try client.setMode(.silent)
+        XCTAssertEqual(runner.requests.map(\.arguments), [
+            ["-B", "-m", "codex_speak.settings", "--data-dir", "/data", "get"],
+            ["-B", "-m", "codex_speak.settings", "--data-dir", "/data", "set", "silent"],
+        ])
+        XCTAssertThrowsError(try BridgeMessage.decode(
+            line: #"{"type":"event","event_id":"0123456789abcdef01234567","mode":"silent","status":"completed","segments":["must reject"]}"#
+        ))
     }
 
     func testControlClientRejectsLooseOrInvalidStdout() {

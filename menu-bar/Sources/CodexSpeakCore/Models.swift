@@ -1,6 +1,7 @@
 import Foundation
 
 public enum SpeechMode: String, Codable, Sendable {
+    case silent
     case summary
     case full
 }
@@ -61,6 +62,7 @@ public enum BridgeMessage: Equatable, Sendable {
                   eventID.allSatisfy({ $0.isASCII && ($0.isNumber || ("a"..."f").contains(String($0))) }),
                   let rawMode = dictionary["mode"] as? String,
                   let mode = SpeechMode(rawValue: rawMode),
+                  mode == .summary || mode == .full,
                   let status = dictionary["status"] as? String,
                   ["completed", "blocked", "action_required", "silent"].contains(status),
                   status != "silent" || mode == .full,
