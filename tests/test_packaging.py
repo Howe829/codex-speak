@@ -9,11 +9,87 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "assets" / "CodexSpeakMenu.app"
 EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
+
+
+def _paeth_predictor(left: int, above: int, upper_left: int) -> int:
+    estimate = left + above - upper_left
+    left_distance = abs(estimate - left)
+    above_distance = abs(estimate - above)
+    upper_left_distance = abs(estimate - upper_left)
+    if left_distance <= above_distance and left_distance <= upper_left_distance:
+        return left
+    if above_distance <= upper_left_distance:
+        return above
+    return upper_left
+
+
+def _read_png_rgba(path: Path) -> tuple[int, int, list[bytes]]:
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise AssertionError(f"not a PNG: {path}")
+
+    width = height = 0
+    image_data = bytearray()
+    offset = 8
+    while offset < len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        chunk = data[offset + 8 : offset + 8 + length]
+        offset += 12 + length
+        if chunk_type == b"IHDR":
+            header = struct.unpack(">IIBBBBB", chunk)
+            width, height = header[:2]
+            if header[2:] != (8, 6, 0, 0, 0):
+                raise AssertionError(f"unsupported PNG format: {header[2:]}")
+        elif chunk_type == b"IDAT":
+            image_data.extend(chunk)
+        elif chunk_type == b"IEND":
+            break
+
+    bytes_per_pixel = 4
+    stride = width * bytes_per_pixel
+    inflated = zlib.decompress(image_data)
+    if len(inflated) != height * (stride + 1):
+        raise AssertionError("unexpected PNG scanline length")
+
+    rows: list[bytes] = []
+    previous = bytearray(stride)
+    offset = 0
+    for _ in range(height):
+        filter_type = inflated[offset]
+        encoded = inflated[offset + 1 : offset + stride + 1]
+        decoded = bytearray(stride)
+        for index, value in enumerate(encoded):
+            left = decoded[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+            above = previous[index]
+            upper_left = (
+                previous[index - bytes_per_pixel]
+                if index >= bytes_per_pixel
+                else 0
+            )
+            if filter_type == 0:
+                predictor = 0
+            elif filter_type == 1:
+                predictor = left
+            elif filter_type == 2:
+                predictor = above
+            elif filter_type == 3:
+                predictor = (left + above) // 2
+            elif filter_type == 4:
+                predictor = _paeth_predictor(left, above, upper_left)
+            else:
+                raise AssertionError(f"unsupported PNG filter: {filter_type}")
+            decoded[index] = (value + predictor) & 0xFF
+        rows.append(bytes(decoded))
+        previous = decoded
+        offset += stride + 1
+    return width, height, rows
 
 
 class PackagingTests(unittest.TestCase):
@@ -234,6 +310,9 @@ class PackagingTests(unittest.TestCase):
             renderer_source,
         )
         self.assertNotIn("artwork/concepts", renderer_source)
+        self.assertIn("func drawArtwork(in context: NSGraphicsContext)", renderer_source)
+        self.assertNotIn("NSImage(contentsOf:", renderer_source)
+        self.assertNotIn("source.draw(", renderer_source)
 
         png_header = github_icon.read_bytes()[:24]
         self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
@@ -244,6 +323,176 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(icns_header[:4], b"icns")
         self.assertEqual(struct.unpack(">I", icns_header[4:8])[0], app_icon.stat().st_size)
         self.assertGreater(app_icon.stat().st_size, 1024)
+
+    def test_public_icon_direct_renderer_matches_the_vector_master(self) -> None:
+        renderer_source = (
+            ROOT / "scripts" / "render_icon_assets.swift"
+        ).read_text(encoding="utf-8")
+        compact_source = re.sub(r"\s+", " ", renderer_source)
+
+        speaker_source = renderer_source.split("func speakerPath() -> CGPath {", 1)[
+            1
+        ].split("\n}\n\nfunc draw(", 1)[0]
+        speaker_points = [
+            tuple(float(value) for value in match)
+            for match in re.findall(
+                r"markPoint\(([0-9.]+), ([0-9.]+)\)", speaker_source
+            )
+        ]
+        self.assertEqual(
+            speaker_points,
+            [
+                (5.5, 5),
+                (3.5, 7),
+                (4.4, 5),
+                (3.5, 5.9),
+                (3.5, 17),
+                (5.5, 19),
+                (3.5, 18.1),
+                (4.4, 19),
+                (10, 19),
+                (18.7, 21.5),
+                (20.4, 20.2),
+                (19.55, 21.75),
+                (20.4, 21.1),
+                (20.4, 3.8),
+                (18.7, 2.5),
+                (20.4, 2.9),
+                (19.55, 2.25),
+                (10, 5),
+            ],
+        )
+        self.assertIn("let markOrigin = CGFloat(176)", renderer_source)
+        self.assertIn("let markScale = CGFloat(28)", renderer_source)
+        self.assertIn(
+            "CGRect(x: 32, y: 32, width: 960, height: 960)",
+            compact_source,
+        )
+        self.assertIn("cornerWidth: 224, cornerHeight: 224", compact_source)
+        self.assertEqual(
+            re.findall(
+                r"color\((0x[0-9A-F]+), (0x[0-9A-F]+), (0x[0-9A-F]+)\)",
+                renderer_source,
+            ),
+            [
+                ("0x26", "0x36", "0xA7"),
+                ("0x6D", "0x28", "0xD9"),
+                ("0xFF", "0xFF", "0xFF"),
+                ("0xC7", "0xF2", "0xFF"),
+            ],
+        )
+        for snippet in (
+            "CGPoint(x: 96, y: 944)",
+            "CGPoint(x: 928, y: 80)",
+            "from: markPoint(4, 19)",
+            "to: markPoint(20, 4)",
+            "chevron.move(to: markPoint(6.4, 14.6))",
+            "chevron.addLine(to: markPoint(9.5, 12))",
+            "chevron.addLine(to: markPoint(6.4, 9.4))",
+            "context.cgContext.setLineWidth(markScale * 1.8)",
+            "x: markOrigin + markScale * 10.8",
+            "y: markOrigin + markScale * 8.6",
+            "width: markScale * 4",
+            "height: markScale * 1.6",
+            "cornerWidth: markScale * 0.8",
+            "cornerHeight: markScale * 0.8",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, renderer_source)
+
+    def test_public_icon_raster_matches_palette_crop_and_speaker_bounds(self) -> None:
+        width, height, rows = _read_png_rgba(
+            ROOT / "assets" / "codex-speak-github.png"
+        )
+        self.assertEqual((width, height), (1024, 1024))
+
+        def rgba_at(x: int, y: int) -> tuple[int, int, int, int]:
+            offset = x * 4
+            return tuple(rows[y][offset : offset + 4])
+
+        for x, y in ((0, 0), (31, 512), (992, 512), (1023, 1023)):
+            with self.subTest(transparent=(x, y)):
+                self.assertEqual(rgba_at(x, y)[3], 0)
+        for x, y in ((32, 512), (512, 32), (991, 512), (512, 991)):
+            with self.subTest(opaque=(x, y)):
+                self.assertEqual(rgba_at(x, y)[3], 255)
+
+        for point, expected, tolerance in (
+            ((128, 80), (0x26, 0x36, 0xA7), 2),
+            ((800, 944), (0x6D, 0x28, 0xD9), 5),
+            ((274, 400), (0xFF, 0xFF, 0xFF), 4),
+            ((700, 700), (0xC7, 0xF2, 0xFF), 5),
+        ):
+            with self.subTest(palette=point):
+                actual = rgba_at(*point)[:3]
+                self.assertLessEqual(
+                    max(abs(actual[index] - expected[index]) for index in range(3)),
+                    tolerance,
+                )
+
+        left_background = rgba_at(273, 512)[:3]
+        left_speaker = rgba_at(274, 512)[:3]
+        right_speaker = rgba_at(746, 512)[:3]
+        right_background = rgba_at(748, 512)[:3]
+        self.assertGreater(sum(left_speaker), sum(left_background) + 300)
+        self.assertGreater(sum(right_speaker), sum(right_background) + 300)
+
+    def test_public_icon_prompt_cutouts_have_crisp_target_resolution_edges(self) -> None:
+        width, height, rows = _read_png_rgba(
+            ROOT / "assets" / "codex-speak-github.png"
+        )
+        self.assertEqual((width, height), (1024, 1024))
+
+        def rgb_at(x: int, y: int) -> tuple[int, int, int]:
+            offset = x * 4
+            self.assertEqual(rows[y][offset + 3], 255)
+            return tuple(rows[y][offset : offset + 3])
+
+        cutout_samples = (
+            ("chevron-upper", rgb_at(399, 476), rgb_at(658, 226)),
+            ("chevron-lower", rgb_at(399, 548), rgb_at(831, 132)),
+            ("cursor", rgb_at(534, 585), rgb_at(880, 252)),
+        )
+        for cutout, sample, background_reference in cutout_samples:
+            with self.subTest(cutout=cutout):
+                self.assertLessEqual(
+                    max(
+                        abs(sample[index] - background_reference[index])
+                        for index in range(3)
+                    ),
+                    2,
+                )
+
+        between_chevron_branches = rgb_at(400, 512)
+        self.assertGreater(
+            sum(
+                abs(between_chevron_branches[index] - cutout_samples[0][1][index])
+                for index in range(3)
+            ),
+            300,
+        )
+
+        cursor_center = rgb_at(534, 585)
+        right_reference = rgb_at(620, 585)
+        self.assertGreater(
+            sum(abs(cursor_center[index] - right_reference[index]) for index in range(3)),
+            300,
+        )
+
+        edge_samples = (
+            ("right", rgb_at(600, 585), right_reference),
+            ("top", rgb_at(534, 550), rgb_at(534, 540)),
+            ("bottom", rgb_at(534, 620), rgb_at(534, 630)),
+        )
+        for edge, outside, reference in edge_samples:
+            with self.subTest(edge=edge):
+                self.assertLessEqual(
+                    max(
+                        abs(outside[index] - reference[index])
+                        for index in range(3)
+                    ),
+                    3,
+                )
 
     def test_embedded_helper_has_exact_metadata_and_is_executable(self) -> None:
         self.assertTrue(os.access(EXECUTABLE, os.X_OK), EXECUTABLE)
