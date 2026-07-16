@@ -4,6 +4,7 @@ import Foundation
 
 enum IconRenderError: Error {
     case sourceUnavailable(URL)
+    case sourceInvalid(URL, String)
     case gradientUnavailable
     case bitmapUnavailable(Int)
     case graphicsContextUnavailable(Int)
@@ -21,9 +22,279 @@ let githubURL = root.appendingPathComponent("assets/codex-speak-github.png")
 let iconsetURL = root.appendingPathComponent(".build/CodexSpeak.iconset", isDirectory: true)
 let icnsURL = root.appendingPathComponent("menu-bar/Resources/AppIcon.icns")
 
-guard fileManager.fileExists(atPath: sourceURL.path) else {
-    throw IconRenderError.sourceUnavailable(sourceURL)
+struct SVGElement: Equatable {
+    let name: String
+    let parentName: String?
+    let parentID: String?
+    let attributes: [String: String]
 }
+
+final class SVGMasterParser: NSObject, XMLParserDelegate {
+    private struct OpenElement {
+        let name: String
+        let id: String?
+    }
+
+    private(set) var elements: [String: SVGElement] = [:]
+    private(set) var gradientStops: [String: [[String: String]]] = [:]
+    private(set) var rootAttributes: [String: String]?
+    private(set) var rootCount = 0
+    private(set) var elementNames: [String] = []
+    private(set) var issue: String?
+    private var stack: [OpenElement] = []
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        elementNames.append(elementName)
+        if elementName == "svg" {
+            rootCount += 1
+            if rootAttributes == nil {
+                rootAttributes = attributeDict
+            }
+        }
+
+        let parentName = stack.last?.name
+        let parentID = stack.reversed().compactMap { $0.id }.first
+        let id = attributeDict["id"]
+        if let id {
+            if elements[id] != nil {
+                issue = issue ?? "duplicate id: \(id)"
+            } else {
+                elements[id] = SVGElement(
+                    name: elementName,
+                    parentName: parentName,
+                    parentID: parentID,
+                    attributes: attributeDict
+                )
+            }
+        }
+        if elementName == "stop", let parentID {
+            gradientStops[parentID, default: []].append(attributeDict)
+        }
+        stack.append(OpenElement(name: elementName, id: id))
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        if stack.isEmpty {
+            issue = issue ?? "unbalanced closing element: \(elementName)"
+        } else {
+            stack.removeLast()
+        }
+    }
+
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
+        issue = issue ?? parseError.localizedDescription
+    }
+}
+
+func attributes(
+    _ values: (String, String)...
+) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: values)
+}
+
+func validateAuthoritativeSVG(at url: URL) throws {
+    guard let data = try? Data(contentsOf: url) else {
+        throw IconRenderError.sourceUnavailable(url)
+    }
+
+    let delegate = SVGMasterParser()
+    let parser = XMLParser(data: data)
+    parser.delegate = delegate
+    parser.shouldProcessNamespaces = false
+    parser.shouldResolveExternalEntities = false
+    guard parser.parse(), delegate.issue == nil else {
+        throw IconRenderError.sourceInvalid(
+            url,
+            delegate.issue ?? parser.parserError?.localizedDescription ?? "XML parse failed"
+        )
+    }
+
+    guard
+        delegate.rootCount == 1,
+        delegate.rootAttributes == attributes(
+            ("xmlns", "http://www.w3.org/2000/svg"),
+            ("viewBox", "0 0 1024 1024")
+        ),
+        delegate.elementNames == [
+            "svg",
+            "title",
+            "defs",
+            "linearGradient",
+            "stop",
+            "stop",
+            "linearGradient",
+            "stop",
+            "stop",
+            "mask",
+            "rect",
+            "path",
+            "rect",
+            "rect",
+            "g",
+            "path",
+        ]
+    else {
+        throw IconRenderError.sourceInvalid(url, "invalid SVG root or element structure")
+    }
+
+    let expectedElements: [String: SVGElement] = [
+        "background-gradient": SVGElement(
+            name: "linearGradient",
+            parentName: "defs",
+            parentID: nil,
+            attributes: attributes(
+                ("id", "background-gradient"),
+                ("x1", "96"),
+                ("y1", "80"),
+                ("x2", "928"),
+                ("y2", "944"),
+                ("gradientUnits", "userSpaceOnUse")
+            )
+        ),
+        "container-gradient": SVGElement(
+            name: "linearGradient",
+            parentName: "defs",
+            parentID: nil,
+            attributes: attributes(
+                ("id", "container-gradient"),
+                ("x1", "4"),
+                ("y1", "19"),
+                ("x2", "20"),
+                ("y2", "4"),
+                ("gradientUnits", "userSpaceOnUse")
+            )
+        ),
+        "prompt-cutout": SVGElement(
+            name: "mask",
+            parentName: "defs",
+            parentID: nil,
+            attributes: attributes(
+                ("id", "prompt-cutout"),
+                ("maskUnits", "userSpaceOnUse"),
+                ("x", "0"),
+                ("y", "0"),
+                ("width", "24"),
+                ("height", "24")
+            )
+        ),
+        "prompt-mask-fill": SVGElement(
+            name: "rect",
+            parentName: "mask",
+            parentID: "prompt-cutout",
+            attributes: attributes(
+                ("id", "prompt-mask-fill"),
+                ("x", "0"),
+                ("y", "0"),
+                ("width", "24"),
+                ("height", "24"),
+                ("fill", "#FFFFFF")
+            )
+        ),
+        "prompt-chevron": SVGElement(
+            name: "path",
+            parentName: "mask",
+            parentID: "prompt-cutout",
+            attributes: attributes(
+                ("id", "prompt-chevron"),
+                ("d", "M 6.4 14.6 L 9.5 12 L 6.4 9.4"),
+                ("fill", "none"),
+                ("stroke", "#000000"),
+                ("stroke-width", "1.8"),
+                ("stroke-linecap", "round"),
+                ("stroke-linejoin", "round")
+            )
+        ),
+        "prompt-cursor": SVGElement(
+            name: "rect",
+            parentName: "mask",
+            parentID: "prompt-cutout",
+            attributes: attributes(
+                ("id", "prompt-cursor"),
+                ("x", "10.8"),
+                ("y", "8.6"),
+                ("width", "4"),
+                ("height", "1.6"),
+                ("rx", "0.8"),
+                ("fill", "#000000")
+            )
+        ),
+        "app-background": SVGElement(
+            name: "rect",
+            parentName: "svg",
+            parentID: nil,
+            attributes: attributes(
+                ("id", "app-background"),
+                ("x", "32"),
+                ("y", "32"),
+                ("width", "960"),
+                ("height", "960"),
+                ("rx", "224"),
+                ("fill", "url(#background-gradient)")
+            )
+        ),
+        "integrated-mark": SVGElement(
+            name: "g",
+            parentName: "svg",
+            parentID: nil,
+            attributes: attributes(
+                ("id", "integrated-mark"),
+                ("transform", "translate(176 848) scale(28 -28)")
+            )
+        ),
+        "speaker-container": SVGElement(
+            name: "path",
+            parentName: "g",
+            parentID: "integrated-mark",
+            attributes: attributes(
+                ("id", "speaker-container"),
+                (
+                    "d",
+                    "M 5.5 5 C 4.4 5 3.5 5.9 3.5 7 "
+                        + "L 3.5 17 C 3.5 18.1 4.4 19 5.5 19 "
+                        + "L 10 19 L 18.7 21.5 "
+                        + "C 19.55 21.75 20.4 21.1 20.4 20.2 "
+                        + "L 20.4 3.8 C 20.4 2.9 19.55 2.25 18.7 2.5 "
+                        + "L 10 5 Z"
+                ),
+                ("fill", "url(#container-gradient)"),
+                ("mask", "url(#prompt-cutout)")
+            )
+        ),
+    ]
+    guard delegate.elements == expectedElements else {
+        throw IconRenderError.sourceInvalid(
+            url,
+            "authoritative element geometry or attributes changed"
+        )
+    }
+
+    let expectedStops = [
+        "background-gradient": [
+            attributes(("offset", "0"), ("stop-color", "#2636A7")),
+            attributes(("offset", "1"), ("stop-color", "#6D28D9")),
+        ],
+        "container-gradient": [
+            attributes(("offset", "0"), ("stop-color", "#FFFFFF")),
+            attributes(("offset", "1"), ("stop-color", "#C7F2FF")),
+        ],
+    ]
+    guard delegate.gradientStops == expectedStops else {
+        throw IconRenderError.sourceInvalid(url, "authoritative gradient stops changed")
+    }
+}
+
+try validateAuthoritativeSVG(at: sourceURL)
 
 let masterSize = CGFloat(1024)
 let markOrigin = CGFloat(176)

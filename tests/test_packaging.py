@@ -329,6 +329,78 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(struct.unpack(">I", icns_header[4:8])[0], app_icon.stat().st_size)
         self.assertGreater(app_icon.stat().st_size, 1024)
 
+    def test_public_icon_renderer_rejects_changed_authoritative_svg(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            renderer = temporary_root / "scripts" / "render_icon_assets.swift"
+            renderer.parent.mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts" / "render_icon_assets.swift", renderer)
+
+            source = temporary_root / "artwork" / "codex-speak-app-icon.svg"
+            source.parent.mkdir(parents=True)
+            canonical = (
+                ROOT / "artwork" / "codex-speak-app-icon.svg"
+            ).read_text(encoding="utf-8")
+            background_line = next(
+                line
+                for line in canonical.splitlines()
+                if 'id="app-background"' in line
+            )
+            moved_background = canonical.replace(
+                f"{background_line}\n",
+                "",
+                1,
+            ).replace(
+                "  </defs>",
+                f"{background_line}\n  </defs>",
+                1,
+            )
+            mutations = {
+                "gradient-coordinate": canonical.replace(
+                    'x2="928"', 'x2="929"', 1
+                ),
+                "direct-parent": moved_background,
+            }
+
+            for mutation, changed in mutations.items():
+                with self.subTest(mutation=mutation):
+                    self.assertNotEqual(changed, canonical)
+                    source.write_text(changed, encoding="utf-8")
+
+                    environment = os.environ.copy()
+                    environment["CLANG_MODULE_CACHE_PATH"] = str(
+                        temporary_root / "clang-module-cache"
+                    )
+                    environment["SWIFT_MODULECACHE_PATH"] = str(
+                        temporary_root / "swift-module-cache"
+                    )
+                    result = subprocess.run(
+                        [str(renderer)],
+                        cwd=temporary_root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("sourceInvalid", result.stdout + result.stderr)
+                    self.assertFalse(
+                        (
+                            temporary_root
+                            / "assets"
+                            / "codex-speak-github.png"
+                        ).exists()
+                    )
+                    self.assertFalse(
+                        (
+                            temporary_root
+                            / "menu-bar"
+                            / "Resources"
+                            / "AppIcon.icns"
+                        ).exists()
+                    )
+
     def test_public_icon_direct_renderer_matches_the_vector_master(self) -> None:
         renderer_source = (
             ROOT / "scripts" / "render_icon_assets.swift"
