@@ -130,6 +130,18 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), "代码")
 
+    def test_classifies_original_inline_content_before_normalizing_it(self) -> None:
+        cases = (
+            '`"secret"`',
+            "`“secret”`",
+            "`[label](https://example.com)`",
+            "`![image](/private/image.png)`",
+            "`snake_case`",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), "代码")
+
     def test_replaces_complete_home_relative_path(self) -> None:
         body = "查看 ~/secret/file.txt 获取详情"
         self.assertEqual(normalize_full_text(body), "查看 相关文件 获取详情")

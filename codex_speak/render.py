@@ -92,10 +92,10 @@ def _replace_inline_code(match: re.Match[str]) -> str:
 def normalize_full_text(value: str) -> str:
     text = _remove_unicode_controls(value)
     text = _replace_fenced_code(text)
+    text = _INLINE_CODE_RE.sub(_replace_inline_code, text)
     text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
     text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
-    text = _INLINE_CODE_RE.sub(_replace_inline_code, text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
     text = _TABLE_SEPARATOR_RE.sub("", text)
