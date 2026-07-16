@@ -1,5 +1,11 @@
 # Codex Speak Icon Family Implementation Plan
 
+> **Superseded (2026-07-16):** The user selected the integrated speaker-container
+> concept with an embedded `>_` prompt. Use the
+> [speaker-prompt design](../specs/2026-07-16-codex-speak-speaker-prompt-icon-design.md)
+> and its [implementation plan](2026-07-16-codex-speak-speaker-prompt-icon.md)
+> instead of this three-pulse plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship an original three-pulse-stair icon family for Codex Speak as a GitHub/App icon and a native monochrome macOS menu-bar icon.

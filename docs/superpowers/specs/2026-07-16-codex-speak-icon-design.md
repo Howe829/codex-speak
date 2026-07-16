@@ -1,5 +1,11 @@
 # Codex Speak Icon Family Design
 
+> **Superseded (2026-07-16):** The user selected the integrated speaker-container
+> concept with an embedded `>_` prompt. Use the
+> [speaker-prompt design](2026-07-16-codex-speak-speaker-prompt-icon-design.md)
+> and its [implementation plan](../plans/2026-07-16-codex-speak-speaker-prompt-icon.md)
+> instead of this three-pulse direction.
+
 ## Goal
 
 Create an original, compact icon family for Codex Speak that works as both a
