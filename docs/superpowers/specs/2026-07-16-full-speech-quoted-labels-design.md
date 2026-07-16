@@ -41,8 +41,9 @@ For a matched single-backtick inline span, unwrap and speak the content only
 when all of these conditions hold:
 
 1. The trimmed content contains 1 through 32 Unicode characters.
-2. Every character is a Unicode letter or number, whitespace, hyphen, or
-   underscore.
+2. Every character is a Unicode letter or number, whitespace, or ASCII
+   hyphen. Underscores remain code-shaped because the later Markdown emphasis
+   pass would otherwise change the label's visible text.
 3. The content contains no newline.
 
 Examples preserved as labels:
