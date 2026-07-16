@@ -8,6 +8,8 @@
 	<string>Codex Speak</string>
 	<key>CFBundleExecutable</key>
 	<string>CodexSpeakMenu</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.howard.codex-speak.menu</string>
 	<key>CFBundleInfoDictionaryVersion</key>

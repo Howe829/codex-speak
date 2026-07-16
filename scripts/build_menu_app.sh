@@ -32,6 +32,8 @@ STAGED_APP="$STAGING/CodexSpeakMenu.app"
 
 mkdir -p "$STAGED_APP/Contents/MacOS"
 cp "$PACKAGE/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
+mkdir -p "$STAGED_APP/Contents/Resources"
+cp "$PACKAGE/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
 lipo -create "$ARM64_BINARY" "$X86_64_BINARY" \
     -output "$STAGED_APP/Contents/MacOS/CodexSpeakMenu"
 chmod 755 "$STAGED_APP/Contents/MacOS/CodexSpeakMenu"

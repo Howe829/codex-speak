@@ -4,6 +4,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -222,6 +223,28 @@ class PackagingTests(unittest.TestCase):
                     path.read_text(encoding="utf-8"),
                 )
 
+    def test_public_icon_assets_are_deterministic_and_complete(self) -> None:
+        renderer = ROOT / "scripts" / "render_icon_assets.swift"
+        renderer_source = renderer.read_text(encoding="utf-8")
+        github_icon = ROOT / "assets" / "codex-speak-github.png"
+        app_icon = ROOT / "menu-bar" / "Resources" / "AppIcon.icns"
+
+        self.assertIn(
+            'appendingPathComponent("artwork/codex-speak-app-icon.svg")',
+            renderer_source,
+        )
+        self.assertNotIn("artwork/concepts", renderer_source)
+
+        png_header = github_icon.read_bytes()[:24]
+        self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(png_header[12:16], b"IHDR")
+        self.assertEqual(struct.unpack(">II", png_header[16:24]), (1024, 1024))
+
+        icns_header = app_icon.read_bytes()[:8]
+        self.assertEqual(icns_header[:4], b"icns")
+        self.assertEqual(struct.unpack(">I", icns_header[4:8])[0], app_icon.stat().st_size)
+        self.assertGreater(app_icon.stat().st_size, 1024)
+
     def test_embedded_helper_has_exact_metadata_and_is_executable(self) -> None:
         self.assertTrue(os.access(EXECUTABLE, os.X_OK), EXECUTABLE)
         with (APP / "Contents" / "Info.plist").open("rb") as handle:
@@ -232,6 +255,7 @@ class PackagingTests(unittest.TestCase):
                 "CFBundleDevelopmentRegion": "en",
                 "CFBundleDisplayName": "Codex Speak",
                 "CFBundleExecutable": "CodexSpeakMenu",
+                "CFBundleIconFile": "AppIcon",
                 "CFBundleIdentifier": "com.howard.codex-speak.menu",
                 "CFBundleInfoDictionaryVersion": "6.0",
                 "CFBundleName": "Codex Speak",
@@ -241,6 +265,9 @@ class PackagingTests(unittest.TestCase):
                 "LSMinimumSystemVersion": "13.0",
                 "LSUIElement": True,
             },
+        )
+        self.assertTrue(
+            (APP / "Contents" / "Resources" / "AppIcon.icns").is_file()
         )
 
     def test_embedded_helper_is_exactly_universal_and_ad_hoc_signed(self) -> None:
@@ -291,6 +318,11 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("--configuration release", script)
         self.assertIn('codesign --force --deep --sign -', script)
         self.assertIn('codesign --verify --deep --strict', script)
+        self.assertIn('mkdir -p "$STAGED_APP/Contents/Resources"', script)
+        self.assertIn(
+            'cp "$PACKAGE/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"',
+            script,
+        )
         for download_command in ("curl ", "wget ", "git clone", "pip install"):
             self.assertNotIn(download_command, script)
 
