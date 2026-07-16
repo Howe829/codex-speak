@@ -29,6 +29,23 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("compositingOperation = .clear", status_icon)
         self.assertIn("CodexSpeakIconGeometry.chevronCutout", status_icon)
         self.assertIn("CodexSpeakIconGeometry.cursorCutout", status_icon)
+        self.assertRegex(
+            status_icon,
+            r"\) \{ \[pointSize\] _ in\s*"
+            r"StatusIcon\.drawTemplate\(pointSize: pointSize\)\s*\}",
+        )
+        self.assertIn(
+            "nonisolated private static func drawTemplate(pointSize: CGFloat) -> Bool",
+            status_icon,
+        )
+        self.assertIn(
+            "nonisolated private static func speakerPath() -> NSBezierPath",
+            status_icon,
+        )
+        self.assertIn(
+            "nonisolated private static func nsPoint(_ point: IconPoint) -> NSPoint",
+            status_icon,
+        )
         self.assertNotIn('title = "◖))"', controller)
         self.assertNotIn('title = "!"', controller)
         self.assertNotIn("systemSymbolName:", controller + status_icon)
