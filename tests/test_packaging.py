@@ -93,6 +93,11 @@ def _read_png_rgba(path: Path) -> tuple[int, int, list[bytes]]:
 
 
 class PackagingTests(unittest.TestCase):
+    def test_readme_displays_only_the_production_public_icon(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("![Codex Speak icon](assets/codex-speak-github.png)", readme)
+        self.assertNotIn("artwork/concepts/", readme)
+
     def test_menu_uses_one_template_mark_with_alpha_prompt_cutouts(self) -> None:
         controller = (
             ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"

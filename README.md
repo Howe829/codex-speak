@@ -1,5 +1,7 @@
 # Codex Speak
 
+![Codex Speak icon](assets/codex-speak-github.png)
+
 Codex Speak is a local macOS Codex Plugin that speaks turn outcomes with the
 system `say` command. It can announce concise outcome summaries or read the
 complete visible response, while a private menu bar helper provides playback
