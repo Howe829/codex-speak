@@ -10,6 +10,7 @@ from typing import Callable
 
 from .diagnostics import record
 from .queue import poll_next, try_worker_lock
+from .settings import load_mode
 
 
 def run_worker(
@@ -21,6 +22,7 @@ def run_worker(
     clock: Callable[[], float] | None = None,
     monotonic: Callable[[], float] | None = None,
     clock_id: str | None = None,
+    mode_loader: Callable[[Path], str] = load_mode,
 ) -> int:
     runner = run_command or subprocess.run
     sleeper = sleep or time.sleep
@@ -38,6 +40,16 @@ def run_worker(
                 if result.wait_seconds is None:
                     return 0
                 sleeper(max(0.01, min(result.wait_seconds, 1.0)))
+                continue
+
+            if mode_loader(data_dir) == "silent":
+                record(
+                    data_dir,
+                    event_id=event.event_id,
+                    status=event.status,
+                    result="discarded",
+                    mode=event.mode,
+                )
                 continue
 
             if not say_path.is_file() or not os.access(say_path, os.X_OK):

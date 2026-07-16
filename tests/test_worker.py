@@ -20,12 +20,77 @@ def summary_payload(status: str, text: str) -> SpeechPayload:
     return SpeechPayload("summary", status, (text,))
 
 
+def read_diagnostics(data_dir: Path) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in (data_dir / "diagnostics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+
 class WorkerTests(unittest.TestCase):
     def _fake_executable(self, directory: Path) -> Path:
         path = directory / "say"
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
+
+    def test_silent_mode_discards_each_claimed_event_without_invoking_say(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            say_path = self._fake_executable(Path(temporary))
+            enqueue(
+                data_dir,
+                summary_payload("completed", "PRIVATE SILENT SPEECH"),
+                session_id="silent-session",
+                turn_id="silent-turn",
+                now=100.0,
+            )
+            result = run_worker(
+                data_dir,
+                say_path=say_path,
+                mode_loader=lambda _: "silent",
+                run_command=lambda *_args, **_kwargs: self.fail("say was invoked"),
+                sleep=lambda _: None,
+                clock=lambda: 102.0,
+                monotonic=lambda: 10.0,
+            )
+            self.assertEqual(result, 0)
+            entries = read_diagnostics(data_dir)
+            self.assertEqual(entries[0]["result"], "discarded")
+            self.assertEqual(entries[0]["segment_count"], 0)
+            self.assertIsNone(entries[0]["error_code"])
+            self.assertNotIn("PRIVATE SILENT SPEECH", json.dumps(entries))
+            self.assertEqual(list((data_dir / "spool").glob("*.json")), [])
+
+    def test_worker_refreshes_mode_immediately_before_every_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data"
+            say_path = self._fake_executable(Path(temporary))
+            for index in range(2):
+                enqueue(
+                    data_dir,
+                    summary_payload("completed", f"speech-{index}"),
+                    session_id=f"session-{index}",
+                    turn_id=f"turn-{index}",
+                    now=100.0 + index / 10,
+                )
+            modes = iter(("summary", "silent"))
+            spoken: list[str] = []
+            run_worker(
+                data_dir,
+                say_path=say_path,
+                mode_loader=lambda _: next(modes),
+                run_command=lambda arguments, **kwargs: (
+                    spoken.append(kwargs["input"])
+                    or subprocess.CompletedProcess(arguments, 0)
+                ),
+                sleep=lambda _: None,
+                clock=lambda: 102.0,
+                monotonic=lambda: 10.0,
+            )
+            self.assertEqual(spoken, ["speech-0"])
 
     def test_speaks_fifo_through_stdin_without_exposing_text_in_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
