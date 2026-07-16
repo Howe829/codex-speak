@@ -42,7 +42,10 @@ The menu bar checkmark selects one speech mode:
 - `Summary` speaks only important `completed`, `blocked`, or
   `action_required` outcome text. Ordinary `silent` answers remain quiet.
 - `Full` reads the normalized visible response. Markdown formatting, code,
-  URLs, and local paths are replaced with speech-safe descriptions.
+  URLs, and local paths are replaced with speech-safe descriptions. Double-
+  quote delimiters are removed so macOS speaks their enclosed text, and short
+  prose labels in single backticks are spoken as visible text while code-shaped
+  spans retain the `代码` placeholder.
 
 Important announcements follow the active primary instruction. Internal
 commands, temporary files, tests, test fixtures, validation artifacts, and
@@ -188,5 +191,7 @@ Review changed definitions in `/hooks` and start a new thread afterward.
   use a properly Developer ID signed and notarized copy.
 - Ordinary answers are silent in Summary mode by design; select Full if the
   visible response should be read.
+- Quoted text or a short backtick label is skipped in Full mode: confirm the
+  installed plugin version begins with `0.2.2+codex.` and reinstall it if not.
 - Concurrent announcements are FIFO and play one at a time; use Clear Pending
   Speeches to discard the queue or Stop Current Speech to cancel playback.
