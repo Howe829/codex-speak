@@ -230,6 +230,31 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("https://", normalized)
         self.assertNotIn("CONTROL_SECRET", normalized)
 
+    def test_inline_code_brackets_do_not_expose_destinations(self) -> None:
+        cases = (
+            (
+                "[see `]`](LINK_SECRET)",
+                "see 代码 链接",
+                ("LINK_SECRET",),
+            ),
+            (
+                "![see `]`](IMAGE_SECRET)",
+                "see 代码 图片",
+                ("IMAGE_SECRET",),
+            ),
+            (
+                "[![see `]`](INNER_SECRET)](OUTER_SECRET)",
+                "see 代码 图片 链接",
+                ("INNER_SECRET", "OUTER_SECRET"),
+            ),
+        )
+        for body, expected, canaries in cases:
+            with self.subTest(body=body):
+                normalized = normalize_full_text(body)
+                self.assertEqual(normalized, expected)
+                for canary in canaries:
+                    self.assertNotIn(canary, normalized)
+
     def test_unmatched_markdown_delimiters_have_bounded_scan_time(self) -> None:
         body = "[" * 20_000 + "(" * 20_000 + "public"
 
@@ -239,6 +264,23 @@ class RenderTests(unittest.TestCase):
 
         self.assertEqual(normalized, body)
         self.assertLess(elapsed, 1.5)
+
+    def test_balanced_container_depth_scales_without_reindexing(self) -> None:
+        timings: list[float] = []
+        for depth in (600, 1_200, 2_400, 4_800):
+            body = "x"
+            for _ in range(depth):
+                body = f"[{body}](d)"
+
+            started = time.perf_counter()
+            normalized = normalize_full_text(body)
+            timings.append(time.perf_counter() - started)
+
+            self.assertEqual(normalized, "x" + " 链接" * depth)
+
+        self.assertLess(timings[-1], 2.0)
+        for previous, current in zip(timings, timings[1:]):
+            self.assertLess(current, previous * 3 + 0.002)
 
     def test_deep_containers_complete_without_internal_exceptions(self) -> None:
         depth = 1200

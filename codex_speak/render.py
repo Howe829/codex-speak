@@ -68,19 +68,30 @@ class _MarkdownContainer:
     kind: Literal["image", "link"]
     start: int
     end: int
-    visible_text: str
+    visible_start: int
+    visible_end: int
+
+
+@dataclass(frozen=True, slots=True)
+class _InlineCodeSpan:
+    start: int
+    end: int
+    label: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class _MarkdownContainerIndex:
     openings: tuple[int, ...]
     containers: tuple[_MarkdownContainer, ...]
+    inline_starts: tuple[int, ...]
+    inline_spans: tuple[_InlineCodeSpan, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _FragmentScan:
     value: str
     cursor: int
+    end: int
     starts_at_line_start: bool
     container_index: _MarkdownContainerIndex
 
@@ -97,6 +108,7 @@ _FragmentWork = _FragmentScan | _FragmentEmission
 class _PlainContainerScan:
     value: str
     cursor: int
+    end: int
     container_index: _MarkdownContainerIndex
 
 
@@ -194,18 +206,6 @@ def _append_fragment(
 ) -> None:
     if isinstance(fragment, _OrdinaryFragment) and not fragment.value:
         return
-    if (
-        isinstance(fragment, _OrdinaryFragment)
-        and fragments
-        and isinstance(fragments[-1], _OrdinaryFragment)
-    ):
-        previous = fragments[-1]
-        assert isinstance(previous, _OrdinaryFragment)
-        fragments[-1] = _OrdinaryFragment(
-            previous.value + fragment.value,
-            previous.starts_at_line_start,
-        )
-        return
     fragments.append(fragment)
 
 
@@ -217,14 +217,30 @@ def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
     parenthesis_closings: dict[int, int] = {}
     escaped_indices: set[int] = set()
     escaped = False
+    matched_inline = tuple(_INLINE_CODE_RE.finditer(value))
+    inline_spans = tuple(
+        _InlineCodeSpan(match.start(), match.end(), _inline_label(match))
+        for match in matched_inline
+    )
+    inline_matches = iter(matched_inline)
+    inline = next(inline_matches, None)
+    index = 0
 
-    for index, char in enumerate(value):
+    while index < len(value):
+        if inline is not None and index == inline.start():
+            index = inline.end()
+            inline = next(inline_matches, None)
+            escaped = False
+            continue
+        char = value[index]
         if escaped:
             escaped_indices.add(index)
             escaped = False
+            index += 1
             continue
         if char == "\\":
             escaped = True
+            index += 1
             continue
         if char == "[":
             bracket_stack.append(index)
@@ -235,6 +251,7 @@ def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
             parenthesis_stack.append(index)
         elif char == ")" and parenthesis_stack:
             parenthesis_closings[parenthesis_stack.pop()] = index
+        index += 1
 
     openings: list[int] = []
     containers: list[_MarkdownContainer] = []
@@ -265,21 +282,45 @@ def _index_markdown_containers(value: str) -> _MarkdownContainerIndex:
                 "image" if is_image else "link",
                 opening - 1 if is_image else opening,
                 destination_closing + 1,
-                value[opening + 1 : closing],
+                opening + 1,
+                closing,
             )
         )
-    return _MarkdownContainerIndex(tuple(openings), tuple(containers))
+    return _MarkdownContainerIndex(
+        tuple(openings),
+        tuple(containers),
+        tuple(span.start for span in inline_spans),
+        inline_spans,
+    )
 
 
 def _find_markdown_container(
-    index: _MarkdownContainerIndex, cursor: int
+    index: _MarkdownContainerIndex, cursor: int, end: int
 ) -> _MarkdownContainer | None:
     position = bisect_left(index.openings, cursor)
-    return (
-        index.containers[position]
-        if position < len(index.containers)
-        else None
-    )
+    while position < len(index.containers):
+        opening = index.openings[position]
+        if opening >= end:
+            return None
+        container = index.containers[position]
+        if container.start >= cursor and container.end <= end:
+            return container
+        position += 1
+    return None
+
+
+def _find_inline_code_span(
+    index: _MarkdownContainerIndex, cursor: int, end: int
+) -> _InlineCodeSpan | None:
+    position = bisect_left(index.inline_starts, cursor)
+    while position < len(index.inline_spans):
+        span = index.inline_spans[position]
+        if span.start >= end:
+            return None
+        if span.end <= end:
+            return span
+        position += 1
+    return None
 
 
 def _replace_plain_markdown_containers(value: str) -> str:
@@ -288,6 +329,7 @@ def _replace_plain_markdown_containers(value: str) -> str:
         _PlainContainerScan(
             value,
             0,
+            len(value),
             _index_markdown_containers(value),
         )
     ]
@@ -298,29 +340,31 @@ def _replace_plain_markdown_containers(value: str) -> str:
             continue
 
         container = _find_markdown_container(
-            task.container_index, task.cursor
+            task.container_index, task.cursor, task.end
         )
         if container is None:
-            parts.append(task.value[task.cursor:])
+            parts.append(task.value[task.cursor : task.end])
             continue
 
         parts.append(task.value[task.cursor : container.start])
         descriptor = "图片" if container.kind == "image" else "链接"
-        prefix = " " if container.visible_text else ""
+        prefix = (
+            " " if container.visible_start < container.visible_end else ""
+        )
         work.extend(
             (
                 _PlainContainerScan(
                     task.value,
                     container.end,
+                    task.end,
                     task.container_index,
                 ),
                 _PlainContainerEmission(prefix + descriptor),
                 _PlainContainerScan(
-                    container.visible_text,
-                    0,
-                    _index_markdown_containers(
-                        container.visible_text
-                    ),
+                    task.value,
+                    container.visible_start,
+                    container.visible_end,
+                    task.container_index,
                 ),
             )
         )
@@ -345,6 +389,7 @@ def _parse_text_fragments(
         _FragmentScan(
             value,
             0,
+            len(value),
             starts_at_line_start,
             _index_markdown_containers(value),
         )
@@ -356,16 +401,18 @@ def _parse_text_fragments(
             continue
 
         cursor = task.cursor
-        while cursor < len(task.value):
+        while cursor < task.end:
             container = _find_markdown_container(
-                task.container_index, cursor
+                task.container_index, cursor, task.end
             )
-            inline = _INLINE_CODE_RE.search(task.value, cursor)
+            inline = _find_inline_code_span(
+                task.container_index, cursor, task.end
+            )
             if container is None and inline is None:
                 _append_fragment(
                     fragments,
                     _OrdinaryFragment(
-                        task.value[cursor:],
+                        task.value[cursor : task.end],
                         _starts_at_line_start(
                             task.value,
                             cursor,
@@ -376,10 +423,10 @@ def _parse_text_fragments(
                 break
 
             container_is_next = container is not None and (
-                inline is None or container.start < inline.start()
+                inline is None or container.start < inline.start
             )
             match_start = (
-                container.start if container_is_next else inline.start()
+                container.start if container_is_next else inline.start
             )
             _append_fragment(
                 fragments,
@@ -395,24 +442,28 @@ def _parse_text_fragments(
 
             if not container_is_next:
                 assert inline is not None
-                label = _inline_label(inline)
                 _append_fragment(
                     fragments,
-                    _LabelFragment(label)
-                    if label is not None
+                    _LabelFragment(inline.label)
+                    if inline.label is not None
                     else _CodeFragment(),
                 )
-                cursor = inline.end()
+                cursor = inline.end
                 continue
 
             assert container is not None
             descriptor = "图片" if container.kind == "image" else "链接"
-            prefix = " " if container.visible_text else ""
+            prefix = (
+                " "
+                if container.visible_start < container.visible_end
+                else ""
+            )
             work.extend(
                 (
                     _FragmentScan(
                         task.value,
                         container.end,
+                        task.end,
                         task.starts_at_line_start,
                         task.container_index,
                     ),
@@ -420,12 +471,11 @@ def _parse_text_fragments(
                         _OrdinaryFragment(prefix + descriptor, False)
                     ),
                     _FragmentScan(
-                        container.visible_text,
-                        0,
+                        task.value,
+                        container.visible_start,
+                        container.visible_end,
                         False,
-                        _index_markdown_containers(
-                            container.visible_text
-                        ),
+                        task.container_index,
                     ),
                 )
             )
@@ -467,17 +517,36 @@ def _normalize_ordinary_text(
 def normalize_full_text(value: str) -> str:
     text = _replace_fenced_code_before_fragmenting(value)
     fragments = _parse_text_fragments(text)
-    rendered = (
-        _normalize_ordinary_text(
-            fragment.value,
-            starts_at_line_start=fragment.starts_at_line_start,
+    rendered: list[str] = []
+    ordinary: list[str] = []
+    ordinary_starts_at_line_start = True
+
+    def flush_ordinary() -> None:
+        if not ordinary:
+            return
+        rendered.append(
+            _normalize_ordinary_text(
+                "".join(ordinary),
+                starts_at_line_start=ordinary_starts_at_line_start,
+            )
         )
-        if isinstance(fragment, _OrdinaryFragment)
-        else fragment.value
-        if isinstance(fragment, _LabelFragment)
-        else "代码"
-        for fragment in fragments
-    )
+        ordinary.clear()
+
+    for fragment in fragments:
+        if isinstance(fragment, _OrdinaryFragment):
+            if not ordinary:
+                ordinary_starts_at_line_start = (
+                    fragment.starts_at_line_start
+                )
+            ordinary.append(fragment.value)
+            continue
+        flush_ordinary()
+        rendered.append(
+            fragment.value
+            if isinstance(fragment, _LabelFragment)
+            else "代码"
+        )
+    flush_ordinary()
     return "".join(rendered).strip()
 
 
