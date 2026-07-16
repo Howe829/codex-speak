@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Codex Speak app icon</title>
+  <defs>
+    <linearGradient id="background-gradient" x1="96" y1="80" x2="928" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2636A7"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="container-gradient" x1="4" y1="19" x2="20" y2="4" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C7F2FF"/>
+    </linearGradient>
+    <mask id="prompt-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect id="prompt-mask-fill" x="0" y="0" width="24" height="24" fill="#FFFFFF"/>
+      <path id="prompt-chevron" d="M 6.4 14.6 L 9.5 12 L 6.4 9.4" fill="none" stroke="#000000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect id="prompt-cursor" x="10.8" y="8.6" width="4" height="1.6" rx="0.8" fill="#000000"/>
+    </mask>
+  </defs>
+  <rect id="app-background" x="32" y="32" width="960" height="960" rx="224" fill="url(#background-gradient)"/>
+  <g id="integrated-mark" transform="translate(176 848) scale(28 -28)">
+    <path id="speaker-container" d="M 5.5 5 C 4.4 5 3.5 5.9 3.5 7 L 3.5 17 C 3.5 18.1 4.4 19 5.5 19 L 10 19 L 18.7 21.5 C 19.55 21.75 20.4 21.1 20.4 20.2 L 20.4 3.8 C 20.4 2.9 19.55 2.25 18.7 2.5 L 10 5 Z" fill="url(#container-gradient)" mask="url(#prompt-cutout)"/>
+  </g>
+</svg>
