@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "CodexSpeakCore"),
         .executableTarget(name: "CodexSpeakMenu", dependencies: ["CodexSpeakCore"]),
         .testTarget(name: "CodexSpeakCoreTests", dependencies: ["CodexSpeakCore"]),
+        .testTarget(name: "CodexSpeakMenuTests", dependencies: ["CodexSpeakMenu"]),
     ]
 )

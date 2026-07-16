@@ -29,10 +29,17 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("compositingOperation = .clear", status_icon)
         self.assertIn("CodexSpeakIconGeometry.chevronCutout", status_icon)
         self.assertIn("CodexSpeakIconGeometry.cursorCutout", status_icon)
+        self.assertIn(
+            "drawingHandler: StatusIcon.makeDrawingHandler(pointSize: pointSize)",
+            status_icon,
+        )
         self.assertRegex(
             status_icon,
-            r"\) \{ \[pointSize\] _ in\s*"
-            r"StatusIcon\.drawTemplate\(pointSize: pointSize\)\s*\}",
+            r"nonisolated private static func makeDrawingHandler\(\s*"
+            r"pointSize: CGFloat\s*"
+            r"\) -> @Sendable \(NSRect\) -> Bool\s*\{\s*"
+            r"\{ \[pointSize\] _ in\s*"
+            r"StatusIcon\.drawTemplate\(pointSize: pointSize\)\s*\}\s*\}",
         )
         self.assertIn(
             "nonisolated private static func drawTemplate(pointSize: CGFloat) -> Bool",

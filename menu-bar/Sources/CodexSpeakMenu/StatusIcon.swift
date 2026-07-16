@@ -7,13 +7,20 @@ enum StatusIcon {
         let pointSize = CGFloat(CodexSpeakIconGeometry.templatePointSize)
         let image = NSImage(
             size: NSSize(width: pointSize, height: pointSize),
-            flipped: false
-        ) { [pointSize] _ in
-            StatusIcon.drawTemplate(pointSize: pointSize)
-        }
+            flipped: false,
+            drawingHandler: StatusIcon.makeDrawingHandler(pointSize: pointSize)
+        )
         image.isTemplate = true
         image.accessibilityDescription = "Codex Speak"
         return image
+    }
+
+    nonisolated private static func makeDrawingHandler(
+        pointSize: CGFloat
+    ) -> @Sendable (NSRect) -> Bool {
+        { [pointSize] _ in
+            StatusIcon.drawTemplate(pointSize: pointSize)
+        }
     }
 
     nonisolated private static func drawTemplate(pointSize: CGFloat) -> Bool {
