@@ -76,6 +76,11 @@ def _replace_fenced_code(value: str) -> str:
 
 
 def _replace_inline_code(match: re.Match[str]) -> str:
+    content = _inline_label(match)
+    return content if content is not None else "代码"
+
+
+def _inline_label(match: re.Match[str]) -> str | None:
     ticks = match.group("ticks")
     content = match.group("content").strip()
     is_label = (
@@ -86,13 +91,31 @@ def _replace_inline_code(match: re.Match[str]) -> str:
             for char in content
         )
     )
-    return content if is_label else "代码"
+    return content if is_label else None
+
+
+def _protect_inline_code(value: str) -> tuple[str, tuple[tuple[str, str], ...]]:
+    guard_char = "\ue000"
+    guard = guard_char * (value.count(guard_char) + 1)
+
+    protected: list[tuple[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        label = _inline_label(match)
+        if label is None:
+            return "代码"
+        token = f"{guard}{len(protected)}{guard}"
+        protected.append((token, label))
+        return token
+
+    return _INLINE_CODE_RE.sub(replace, value), tuple(protected)
 
 
 def normalize_full_text(value: str) -> str:
-    text = _remove_unicode_controls(value)
+    text = _replace_fenced_code(value)
+    text, protected_labels = _protect_inline_code(text)
+    text = _remove_unicode_controls(text)
     text = _replace_fenced_code(text)
-    text = _INLINE_CODE_RE.sub(_replace_inline_code, text)
     text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
     text = _IMAGE_RE.sub(lambda match: f"{match.group(1)} 图片".strip(), text)
     text = _MARKDOWN_LINK_RE.sub(r"\1 链接", text)
@@ -102,7 +125,10 @@ def normalize_full_text(value: str) -> str:
     text = _MARKDOWN_LINE_PREFIX_RE.sub("", text)
     text = text.replace("|", " ")
     text = _EMPHASIS_RE.sub("", text)
-    return _WHITESPACE_RE.sub(" ", text).strip()
+    text = _WHITESPACE_RE.sub(" ", text).strip()
+    for token, label in protected_labels:
+        text = text.replace(token, label)
+    return text
 
 
 def _preferred_boundary(value: str, limit: int) -> int:

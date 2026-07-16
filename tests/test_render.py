@@ -142,6 +142,32 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), "代码")
 
+    def test_classifies_inline_content_before_removing_controls(self) -> None:
+        cases = (
+            "`sec\u200bret`",
+            "`a\x00b`",
+            "`" + "a" * 32 + "\u200b`",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), "代码")
+
+    def test_protects_approved_labels_from_downstream_normalization(self) -> None:
+        cases = {
+            "`- item`": "- item",
+            "前文 `- item` 后文": "前文 - item 后文",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_protected_label_tokens_cannot_be_impersonated(self) -> None:
+        imitation = "\ue000_\ue0000\ue000_\ue000"
+        self.assertEqual(
+            normalize_full_text(f"`Full` {imitation}"),
+            "Full \ue000\ue0000\ue000\ue000",
+        )
+
     def test_replaces_complete_home_relative_path(self) -> None:
         body = "查看 ~/secret/file.txt 获取详情"
         self.assertEqual(normalize_full_text(body), "查看 相关文件 获取详情")
