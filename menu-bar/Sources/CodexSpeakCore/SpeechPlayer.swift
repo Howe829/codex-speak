@@ -7,6 +7,7 @@ public actor SpeechPlayer: SpeechPlaying {
     private var activePlaybackID: UUID?
     private var activeProcess: (id: UUID, process: any ManagedProcess)?
     private var cancellationRequested = false
+    private var playbackAuthorizationGeneration: UInt64 = 0
 
     public init() {
         launcher = FoundationProcessLauncher()
@@ -24,7 +25,26 @@ public actor SpeechPlayer: SpeechPlaying {
         self.clock = clock
     }
 
+    public func authorizePlayback() -> PlaybackAuthorization {
+        PlaybackAuthorization(generation: playbackAuthorizationGeneration)
+    }
+
     public func play(event: SpeechEvent) async -> PlaybackResult {
+        await play(event: event, authorization: authorizePlayback())
+    }
+
+    public func play(
+        event: SpeechEvent,
+        authorization: PlaybackAuthorization
+    ) async -> PlaybackResult {
+        guard authorization.generation == playbackAuthorizationGeneration else {
+            return PlaybackResult(
+                outcome: .cancelled,
+                errorCode: nil,
+                completedSegmentCount: 0,
+                durationMilliseconds: 0
+            )
+        }
         let started = clock()
         guard activePlaybackID == nil else {
             return result(.failed, .speechStartFailed, 0, since: started)
@@ -93,6 +113,7 @@ public actor SpeechPlayer: SpeechPlaying {
     }
 
     public func stopCurrent() {
+        playbackAuthorizationGeneration &+= 1
         guard activePlaybackID != nil else { return }
         cancellationRequested = true
         activeProcess?.process.terminate()

@@ -1,5 +1,14 @@
+public struct PlaybackAuthorization: Sendable {
+    let generation: UInt64
+
+    init(generation: UInt64) {
+        self.generation = generation
+    }
+}
+
 public protocol SpeechPlaying: Sendable {
-    func play(event: SpeechEvent) async -> PlaybackResult
+    func authorizePlayback() async -> PlaybackAuthorization
+    func play(event: SpeechEvent, authorization: PlaybackAuthorization) async -> PlaybackResult
     func stopCurrent() async
 }
 
@@ -109,6 +118,7 @@ public actor SpeechCoordinator {
     }
 
     public func handle(event: SpeechEvent) async throws {
+        let authorization = await speechPlayer.authorizePlayback()
         let persistedMode = try controlClient.getMode()
         selectedMode = persistedMode
         let result: PlaybackResult
@@ -120,7 +130,7 @@ public actor SpeechCoordinator {
                 durationMilliseconds: 0
             )
         } else {
-            result = await speechPlayer.play(event: event)
+            result = await speechPlayer.play(event: event, authorization: authorization)
         }
         try diagnosticsClient.record(event: event, result: result)
     }

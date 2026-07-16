@@ -232,11 +232,11 @@ final class MenuController: NSObject, NSMenuDelegate {
         guard case let .event(event) = message else { return }
         do {
             try await coordinator.handle(event: event)
-            selectedMode = await coordinator.selectedMode
-            updateCheckmarks()
         } catch {
             showLocalError("Could not record playback result")
         }
+        selectedMode = await coordinator.selectedMode
+        updateCheckmarks()
     }
 
     private func orderlyShutdown() async {

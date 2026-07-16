@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,20 @@ class PackagingTests(unittest.TestCase):
         self.assertRegex(
             source,
             r"func menuWillOpen\(_ menu: NSMenu\)\s*\{\s*refreshMode\(\)\s*\}",
+        )
+
+    def test_claimed_event_checkmarks_sync_even_when_diagnostics_recording_fails(self) -> None:
+        source = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(
+            source,
+            r"try await coordinator\.handle\(event: event\)\s*"
+            r"\}\s*catch\s*\{\s*"
+            r'showLocalError\("Could not record playback result"\)\s*'
+            r"\}\s*"
+            r"selectedMode = await coordinator\.selectedMode\s*"
+            r"updateCheckmarks\(\)",
         )
 
     def test_python_plugin_entries_do_not_write_bytecode_into_installed_tree(self) -> None:
@@ -199,6 +214,28 @@ class PackagingTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        signature_details = subprocess.run(
+            ["codesign", "--display", "--verbose=4", str(APP)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn(
+            "Signature=adhoc",
+            signature_details.stdout + signature_details.stderr,
+        )
+
+    def test_readme_locks_exact_menu_order_and_marketplace_version_prefix(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        exact_menu = """1. `Silent`
+2. `Summary`
+3. `Full`
+4. `Stop Current Speech`
+5. `Clear Pending Speeches`
+6. `Quit Codex Speak`"""
+        self.assertIn(exact_menu, readme)
+        prefixes = set(re.findall(r"\d+\.\d+\.\d+\+codex\.", readme))
+        self.assertEqual(prefixes, {"0.2.3+codex."})
 
     def test_build_script_is_local_and_builds_both_release_architectures(self) -> None:
         script = (ROOT / "scripts" / "build_menu_app.sh").read_text(

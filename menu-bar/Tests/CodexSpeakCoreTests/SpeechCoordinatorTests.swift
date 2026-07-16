@@ -317,6 +317,45 @@ final class SpeechCoordinatorTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(diagnostics.records, [RecordedPlayback(event: claimedEvent, result: playbackResult)])
     }
 
+    func testSilentInvalidatesClaimedEventPausedAfterFinalModeReadBeforePlayerStart() async throws {
+        let log = OrderedLog()
+        let control = ControlSpy(
+            log: log,
+            getActions: [.mode(.full), .mode(.silent)]
+        )
+        let launcher = CountingSpeechLauncher()
+        let clock = IncrementingCoordinatorClock(values: [0, 0])
+        let realPlayer = SpeechPlayer(launcher: launcher, clock: clock.now)
+        let player = PlaybackStartGate(realPlayer: realPlayer)
+        let diagnostics = PlaybackRecordingSpy()
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: diagnostics
+        )
+        let claimedEvent = event(segments: ["CLAIMED_RACE_CANARY_91371"])
+
+        let claimedTask = Task { try await coordinator.handle(event: claimedEvent) }
+        await player.waitUntilPlaybackIsPaused()
+        let silentResult = await coordinator.selectMode(.silent)
+        await player.releasePlayback()
+        try await claimedTask.value
+
+        XCTAssertEqual(silentResult, .applied(.silent))
+        XCTAssertEqual(launcher.launchCount, 0)
+        XCTAssertEqual(diagnostics.records, [
+            RecordedPlayback(
+                event: claimedEvent,
+                result: PlaybackResult(
+                    outcome: .cancelled,
+                    errorCode: nil,
+                    completedSegmentCount: 0,
+                    durationMilliseconds: 0
+                )
+            ),
+        ])
+    }
+
     private func event(segments: [String]) -> SpeechEvent {
         SpeechEvent(
             eventID: "0123456789abcdef01234567",
@@ -440,7 +479,11 @@ private final class SpeechPlayingSpy: SpeechPlaying, @unchecked Sendable {
         self.playbackResult = playbackResult
     }
 
-    func play(event: SpeechEvent) async -> PlaybackResult {
+    func authorizePlayback() async -> PlaybackAuthorization {
+        PlaybackAuthorization(generation: 0)
+    }
+
+    func play(event: SpeechEvent, authorization: PlaybackAuthorization) async -> PlaybackResult {
         lock.withLock { plays += 1 }
         log.append("play")
         return playbackResult
@@ -464,7 +507,11 @@ private actor SuspendingSpeechPlayingSpy: SpeechPlaying {
         self.log = log
     }
 
-    func play(event: SpeechEvent) async -> PlaybackResult {
+    func authorizePlayback() -> PlaybackAuthorization {
+        PlaybackAuthorization(generation: 0)
+    }
+
+    func play(event: SpeechEvent, authorization: PlaybackAuthorization) async -> PlaybackResult {
         PlaybackResult(
             outcome: .spoken,
             errorCode: nil,
@@ -491,6 +538,74 @@ private actor SuspendingSpeechPlayingSpy: SpeechPlaying {
         let continuation = stopContinuation
         stopContinuation = nil
         continuation?.resume()
+    }
+}
+
+private actor PlaybackStartGate: SpeechPlaying {
+    private let realPlayer: SpeechPlayer
+    private var playbackDidPause = false
+    private var playbackContinuation: CheckedContinuation<Void, Never>?
+
+    init(realPlayer: SpeechPlayer) {
+        self.realPlayer = realPlayer
+    }
+
+    func authorizePlayback() async -> PlaybackAuthorization {
+        await realPlayer.authorizePlayback()
+    }
+
+    func play(event: SpeechEvent, authorization: PlaybackAuthorization) async -> PlaybackResult {
+        playbackDidPause = true
+        await withCheckedContinuation { continuation in
+            playbackContinuation = continuation
+        }
+        return await realPlayer.play(event: event, authorization: authorization)
+    }
+
+    func stopCurrent() async {
+        await realPlayer.stopCurrent()
+    }
+
+    func waitUntilPlaybackIsPaused() async {
+        while !playbackDidPause {
+            await Task.yield()
+        }
+    }
+
+    func releasePlayback() {
+        let continuation = playbackContinuation
+        playbackContinuation = nil
+        continuation?.resume()
+    }
+}
+
+private final class CountingSpeechLauncher: ProcessLaunching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var launches = 0
+
+    func launch(_ request: ProcessLaunchRequest) throws -> any ManagedProcess {
+        lock.withLock { launches += 1 }
+        return ImmediateCoordinatorProcess()
+    }
+
+    var launchCount: Int { lock.withLock { launches } }
+}
+
+private final class ImmediateCoordinatorProcess: ManagedProcess, @unchecked Sendable {
+    func waitUntilExit() async -> Int32 { 0 }
+    func terminate() {}
+}
+
+private final class IncrementingCoordinatorClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [UInt64]
+
+    init(values: [UInt64]) {
+        self.values = values
+    }
+
+    func now() -> UInt64 {
+        lock.withLock { values.removeFirst() }
     }
 }
 
