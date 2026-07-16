@@ -24,7 +24,7 @@ final class SpeechCoordinatorTests: XCTestCase, @unchecked Sendable {
 
     func testSilentWriteFailurePreservesPriorModeAndDoesNotStopOrClear() async {
         let log = OrderedLog()
-        let control = ControlSpy(log: log, setError: SpyError.failed)
+        let control = ControlSpy(log: log, setActions: [.failure])
         let player = SpeechPlayingSpy(log: log)
         let coordinator = SpeechCoordinator(
             controlClient: control,
@@ -166,6 +166,37 @@ final class SpeechCoordinatorTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "get"])
     }
 
+    func testFailedAudibleWriteDoesNotSupersedeSuspendedSilentCleanup() async {
+        let log = OrderedLog()
+        let control = ControlSpy(
+            log: log,
+            getActions: [.mode(.silent)],
+            setActions: [.succeed, .failure]
+        )
+        let player = SuspendingSpeechPlayingSpy(log: log)
+        let diagnostics = PlaybackRecordingSpy()
+        let coordinator = SpeechCoordinator(
+            controlClient: control,
+            speechPlayer: player,
+            diagnosticsClient: diagnostics
+        )
+
+        let silentSelection = Task { await coordinator.selectMode(.silent) }
+        await player.waitUntilStopSuspends()
+        let failedFullResult = await coordinator.selectMode(.full)
+        await player.releaseStop()
+        let silentResult = await silentSelection.value
+        let selectedMode = await coordinator.selectedMode
+
+        XCTAssertEqual(failedFullResult, .writeFailed(.silent))
+        XCTAssertEqual(silentResult, .applied(.silent))
+        XCTAssertEqual(selectedMode, .silent)
+        XCTAssertEqual(control.persistedMode, .silent)
+        XCTAssertEqual(control.clearCount, 1)
+        XCTAssertTrue(diagnostics.controlFailures.isEmpty)
+        XCTAssertEqual(log.values, ["set:silent", "get", "stop", "set:full", "clear"])
+    }
+
     func testStartupSilentClearsBeforeReturningForBridgeStart() async throws {
         let log = OrderedLog()
         let control = ControlSpy(log: log, getActions: [.mode(.silent)])
@@ -273,10 +304,15 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
         case failure
     }
 
+    enum SetAction {
+        case succeed
+        case failure
+    }
+
     private let lock = NSLock()
     private let log: OrderedLog
     private var getActions: [GetAction]
-    private let setError: Error?
+    private var setActions: [SetAction]
     private let clearError: Error?
     private var clearCalls = 0
     private var storedPersistedMode = SpeechMode.summary
@@ -284,12 +320,12 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
     init(
         log: OrderedLog,
         getActions: [GetAction] = [],
-        setError: Error? = nil,
+        setActions: [SetAction] = [],
         clearError: Error? = nil
     ) {
         self.log = log
         self.getActions = getActions
-        self.setError = setError
+        self.setActions = setActions
         self.clearError = clearError
     }
 
@@ -304,8 +340,15 @@ private final class ControlSpy: ControlClientProtocol, @unchecked Sendable {
 
     func setMode(_ mode: SpeechMode) throws {
         log.append("set:\(mode.rawValue)")
-        if let setError { throw setError }
-        lock.withLock { storedPersistedMode = mode }
+        let action = lock.withLock {
+            setActions.isEmpty ? SetAction.succeed : setActions.removeFirst()
+        }
+        switch action {
+        case .succeed:
+            lock.withLock { storedPersistedMode = mode }
+        case .failure:
+            throw SpyError.failed
+        }
     }
 
     func clearPending() throws -> Int {

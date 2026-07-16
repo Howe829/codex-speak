@@ -24,7 +24,8 @@ public actor SpeechCoordinator {
     private let controlClient: any ControlClientProtocol
     private let speechPlayer: any SpeechPlaying
     private let diagnosticsClient: any PlaybackRecording
-    private var modeSelectionGeneration: UInt64 = 0
+    private var modeSelectionRequestGeneration: UInt64 = 0
+    private var latestSuccessfullyPersistedSelectionGeneration: UInt64 = 0
     public private(set) var selectedMode = SpeechMode.summary
 
     public init(
@@ -50,14 +51,15 @@ public actor SpeechCoordinator {
     }
 
     public func selectMode(_ requestedMode: SpeechMode) async -> ModeSelectionResult {
-        modeSelectionGeneration &+= 1
-        let selectionGeneration = modeSelectionGeneration
+        modeSelectionRequestGeneration &+= 1
+        let selectionGeneration = modeSelectionRequestGeneration
         let priorMode = selectedMode
         do {
             try controlClient.setMode(requestedMode)
         } catch {
             return .writeFailed(priorMode)
         }
+        latestSuccessfullyPersistedSelectionGeneration = selectionGeneration
 
         if requestedMode != .silent {
             do {
@@ -91,7 +93,7 @@ public actor SpeechCoordinator {
         selectionGeneration: UInt64
     ) async -> ModeSelectionResult {
         await speechPlayer.stopCurrent()
-        guard selectionGeneration == modeSelectionGeneration else {
+        guard selectionGeneration == latestSuccessfullyPersistedSelectionGeneration else {
             return .applied(selectedMode)
         }
         do {
