@@ -161,12 +161,39 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
-    def test_protected_label_tokens_cannot_be_impersonated(self) -> None:
-        imitation = "\ue000_\ue0000\ue000_\ue000"
+    def test_structured_fragments_do_not_corrupt_pua_text(self) -> None:
+        pua_text = "\ue000_\ue0000\ue000_\ue000"
         self.assertEqual(
-            normalize_full_text(f"`Full` {imitation}"),
+            normalize_full_text(f"`Full` {pua_text}"),
             "Full \ue000\ue0000\ue000\ue000",
         )
+
+    def test_preserves_markdown_containers_spanning_inline_labels(self) -> None:
+        cases = {
+            "[see `Full`](https://example.com)": "see Full 链接",
+            "![mode `Full`](/private/mode.png)": "mode Full 图片",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_reassembles_multiple_labels_without_internal_artifacts(self) -> None:
+        normalized = normalize_full_text("`A` `B`_0_`C`")
+        self.assertEqual(normalized, "A B0C")
+        self.assertNotIn("\ue000", normalized)
+
+    def test_reassembles_label_whitespace_and_placement_boundaries(self) -> None:
+        cases = {
+            "  `A`  `B`  ": "A B",
+            "`A`、`B`": "A、B",
+            "`A`\n\n`B`": "A B",
+            "`two  words`": "two  words",
+            "# `A`": "A",
+            "`A`\n- outside": "A outside",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
 
     def test_replaces_complete_home_relative_path(self) -> None:
         body = "查看 ~/secret/file.txt 获取详情"
