@@ -63,10 +63,11 @@ final class MenuConfigurationTests: XCTestCase {
         }
     }
 
-    func testMenuHasExactFiveItemsInOrder() {
+    func testMenuHasExactSixItemsInOrder() {
         XCTAssertEqual(
             codexSpeakMenuItemTitles,
             [
+                "Silent",
                 "Summary",
                 "Full",
                 "Stop Current Speech",

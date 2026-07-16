@@ -15,6 +15,14 @@ EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
 
 
 class PackagingTests(unittest.TestCase):
+    def test_menu_checkmarks_compare_all_modes_against_selected_mode(self) -> None:
+        source = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("silentItem.state = selectedMode == .silent", source)
+        self.assertIn("summaryItem.state = selectedMode == .summary", source)
+        self.assertIn("fullItem.state = selectedMode == .full", source)
+
     def test_menu_refreshes_persisted_mode_when_opened(self) -> None:
         source = (
             ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"

@@ -11,10 +11,12 @@ final class MenuController: NSObject, NSMenuDelegate {
     private let controlClient: any ControlClientProtocol
     private let diagnosticsClient: DiagnosticsClient
     private let speechPlayer: SpeechPlayer
+    private let coordinator: SpeechCoordinator
     private let bridge: BridgeProcess
     private let heartbeat: Heartbeat
     private let configURL: URL
     private let pluginRoot: URL
+    private let silentItem: NSMenuItem
     private let summaryItem: NSMenuItem
     private let fullItem: NSMenuItem
     private var selectedMode = SpeechMode.summary
@@ -34,17 +36,25 @@ final class MenuController: NSObject, NSMenuDelegate {
         configURL: URL
     ) throws {
         self.application = application
-        controlClient = ControlClient(
+        let controlClient = ControlClient(
             pluginRoot: pluginRoot,
             dataDirectory: dataDirectory,
             pythonExecutableURL: pythonExecutableURL
         )
-        diagnosticsClient = DiagnosticsClient(
+        self.controlClient = controlClient
+        let diagnosticsClient = DiagnosticsClient(
             pluginRoot: pluginRoot,
             dataDirectory: dataDirectory,
             pythonExecutableURL: pythonExecutableURL
         )
-        speechPlayer = SpeechPlayer()
+        self.diagnosticsClient = diagnosticsClient
+        let speechPlayer = SpeechPlayer()
+        self.speechPlayer = speechPlayer
+        coordinator = SpeechCoordinator(
+            controlClient: controlClient,
+            speechPlayer: speechPlayer,
+            diagnosticsClient: diagnosticsClient
+        )
         bridge = BridgeProcess(
             pluginRoot: pluginRoot,
             dataDirectory: dataDirectory,
@@ -58,29 +68,30 @@ final class MenuController: NSObject, NSMenuDelegate {
         self.configURL = configURL
         self.pluginRoot = pluginRoot
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        summaryItem = NSMenuItem(title: Self.itemTitles[0], action: #selector(selectSummary), keyEquivalent: "")
-        fullItem = NSMenuItem(title: Self.itemTitles[1], action: #selector(selectFull), keyEquivalent: "")
+        silentItem = NSMenuItem(title: Self.itemTitles[0], action: #selector(selectSilent), keyEquivalent: "")
+        summaryItem = NSMenuItem(title: Self.itemTitles[1], action: #selector(selectSummary), keyEquivalent: "")
+        fullItem = NSMenuItem(title: Self.itemTitles[2], action: #selector(selectFull), keyEquivalent: "")
         super.init()
 
         statusItem.button?.title = "◖))"
         statusItem.button?.toolTip = "Codex Speak"
         let menu = NSMenu()
         let stopItem = NSMenuItem(
-            title: Self.itemTitles[2],
+            title: Self.itemTitles[3],
             action: #selector(stopCurrentSpeech),
             keyEquivalent: ""
         )
         let clearItem = NSMenuItem(
-            title: Self.itemTitles[3],
+            title: Self.itemTitles[4],
             action: #selector(clearPendingSpeeches),
             keyEquivalent: ""
         )
         let quitItem = NSMenuItem(
-            title: Self.itemTitles[4],
+            title: Self.itemTitles[5],
             action: #selector(quit),
             keyEquivalent: ""
         )
-        for item in [summaryItem, fullItem, stopItem, clearItem, quitItem] {
+        for item in [silentItem, summaryItem, fullItem, stopItem, clearItem, quitItem] {
             item.target = self
             menu.addItem(item)
         }
@@ -111,9 +122,9 @@ final class MenuController: NSObject, NSMenuDelegate {
         )
         if let heartbeatTimer { RunLoop.main.add(heartbeatTimer, forMode: .common) }
         if let enablementTimer { RunLoop.main.add(enablementTimer, forMode: .common) }
-        refreshMode()
         bridgeTask = Task { [weak self] in
             guard let self else { return }
+            await refreshCoordinatorMode()
             do {
                 try await bridge.start { [weak self] message in
                     await self?.handle(message)
@@ -125,6 +136,10 @@ final class MenuController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func selectSilent() {
+        selectMode(.silent)
+    }
+
     @objc private func selectSummary() {
         selectMode(.summary)
     }
@@ -134,28 +149,45 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     private func selectMode(_ requestedMode: SpeechMode) {
-        let priorMode = selectedMode
-        do {
-            try controlClient.setMode(requestedMode)
-            selectedMode = try controlClient.getMode()
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await coordinator.selectMode(requestedMode)
+            selectedMode = await coordinator.selectedMode
             updateCheckmarks()
-        } catch {
-            selectedMode = priorMode
-            updateCheckmarks()
-            showLocalError("Could not change speech mode")
+            switch result {
+            case .applied:
+                break
+            case .appliedWithQueueClearFailure:
+                showLocalError("Could not clear pending speeches")
+            case .writeFailed:
+                showLocalError("Could not change speech mode")
+            case .readFailed, .readFailedFailSafe:
+                showLocalError("Could not read speech mode")
+            }
         }
     }
 
     private func refreshMode() {
+        Task { [weak self] in
+            await self?.refreshCoordinatorMode()
+        }
+    }
+
+    private func refreshCoordinatorMode() async {
         do {
-            selectedMode = try controlClient.getMode()
+            let result = try await coordinator.refreshForStartup()
+            selectedMode = await coordinator.selectedMode
             updateCheckmarks()
+            if case .readyWithQueueClearFailure = result {
+                showLocalError("Could not clear pending speeches")
+            }
         } catch {
             showLocalError("Could not read speech mode")
         }
     }
 
     private func updateCheckmarks() {
+        silentItem.state = selectedMode == .silent ? .on : .off
         summaryItem.state = selectedMode == .summary ? .on : .off
         fullItem.state = selectedMode == .full ? .on : .off
     }
@@ -198,9 +230,10 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     private func handle(_ message: BridgeMessage) async {
         guard case let .event(event) = message else { return }
-        let result = await speechPlayer.play(event: event)
         do {
-            try diagnosticsClient.record(event: event, result: result)
+            try await coordinator.handle(event: event)
+            selectedMode = await coordinator.selectedMode
+            updateCheckmarks()
         } catch {
             showLocalError("Could not record playback result")
         }

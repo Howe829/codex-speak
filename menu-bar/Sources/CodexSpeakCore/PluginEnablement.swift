@@ -7,6 +7,7 @@ public enum PluginEnablement: Equatable, Sendable {
 }
 
 public let codexSpeakMenuItemTitles = [
+    "Silent",
     "Summary",
     "Full",
     "Stop Current Speech",
