@@ -1,0 +1,12 @@
+"menu.mode.silent" = "静音";
+"menu.mode.summary" = "摘要";
+"menu.mode.full" = "全文";
+"menu.action.stop" = "停止当前朗读";
+"menu.action.clear" = "清除待朗读内容";
+"menu.action.quit" = "退出 Codex Speak";
+"error.bridge_stopped" = "语音桥接已停止";
+"error.clear_failed" = "无法清除待朗读内容";
+"error.mode_write_failed" = "无法更改朗读模式";
+"error.mode_read_failed" = "无法读取朗读模式";
+"error.heartbeat_unavailable" = "心跳不可用";
+"error.playback_record_failed" = "无法记录播放结果";
