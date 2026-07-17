@@ -36,6 +36,61 @@ def create_runtime(
 
 
 class StopLauncherTests(unittest.TestCase):
+    def test_rejects_unsupported_original_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            family = base / "howe829" / "codex-speak"
+            create_runtime(family, "0.2.6")
+            self.assertIsNone(select_stop_hook(family / "current"))
+
+    def test_rejects_wrong_plugin_family_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            wrong_family = base / "howe829" / "renamed-plugin"
+            create_runtime(wrong_family, "0.2.6")
+            self.assertIsNone(select_stop_hook(wrong_family / "0.2.5"))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_rejects_preexisting_symlinked_marketplace_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            cache = base / "cache"
+            outside_marketplace = base / "outside-marketplace"
+            create_runtime(outside_marketplace / "codex-speak", "0.2.6")
+            cache.mkdir()
+            marketplace = cache / "howe829"
+            marketplace.symlink_to(outside_marketplace, target_is_directory=True)
+
+            self.assertIsNone(
+                select_stop_hook(marketplace / "codex-speak" / "0.2.5")
+            )
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_rejects_preexisting_cross_marketplace_family_symlink_quietly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            marketplace = base / "cache" / "howe829"
+            outside_family = base / "outside-marketplace" / "codex-speak"
+            create_runtime(outside_family, "0.2.6")
+            marketplace.mkdir(parents=True)
+            family = marketplace / "codex-speak"
+            family.symlink_to(outside_family, target_is_directory=True)
+            original = family / "0.2.5"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                patch.dict(os.environ, {"PLUGIN_ROOT": str(original)}, clear=True),
+                patch("hooks.stop_launcher.sys.stdout", stdout),
+                patch("hooks.stop_launcher.sys.stderr", stderr),
+                patch("hooks.stop_launcher.os.execv") as execute,
+            ):
+                self.assertEqual(main(), 0)
+
+            execute.assert_not_called()
+            self.assertEqual(stdout.getvalue(), "{}\n")
+            self.assertEqual(stderr.getvalue(), "")
+
     def test_parse_version_accepts_only_supported_numeric_release_builds(self) -> None:
         self.assertEqual(parse_version("0.2.6"), (0, 2, 6, 0, ""))
         self.assertEqual(

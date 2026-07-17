@@ -24,6 +24,32 @@ def parse_version(value: str) -> tuple[int, int, int, int, str] | None:
     return (int(major), int(minor), int(patch), int(build is not None), build or "")
 
 
+def _validated_family(original_root: Path) -> tuple[Path, str] | None:
+    original_version = original_root.name
+    if parse_version(original_version) is None:
+        return None
+
+    family = original_root.parent
+    marketplace = family.parent
+    try:
+        if (
+            family.name != PLUGIN_NAME
+            or not marketplace.name
+            or marketplace.is_symlink()
+            or family.is_symlink()
+            or not marketplace.is_dir()
+            or not family.is_dir()
+        ):
+            return None
+        resolved_marketplace = marketplace.resolve(strict=True)
+        resolved_family = family.resolve(strict=True)
+        if resolved_family.parent != resolved_marketplace:
+            return None
+        return resolved_family, original_version
+    except (OSError, ValueError):
+        return None
+
+
 def _validate_candidate(
     root: Path, family: Path
 ) -> tuple[tuple[int, int, int, int, str], Path, Path] | None:
@@ -87,8 +113,11 @@ def _validate_candidate(
 
 
 def select_stop_hook(original_root: Path) -> tuple[Path, Path] | None:
-    family = original_root.parent
-    original = _validate_candidate(original_root, family)
+    validated_family = _validated_family(original_root)
+    if validated_family is None:
+        return None
+    family, original_version = validated_family
+    original = _validate_candidate(family / original_version, family)
     if original is not None:
         return original[1], original[2]
 
