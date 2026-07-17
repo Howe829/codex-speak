@@ -29,7 +29,7 @@ _TABLE_SEPARATOR_RE = re.compile(
     r"(?m)^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$"
 )
 _MARKDOWN_LINE_PREFIX_RE = re.compile(
-    r"(?m)^[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|(?:[-+*]|\d+[.)])[ \t]+)"
+    r"(?m)^[ \t]*(?:#{1,6}[ \t]+|>[ \t]*|[-+*][ \t]+)"
 )
 _EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -196,17 +196,16 @@ def _replace_inline_code(match: re.Match[str]) -> str:
 def _inline_label(match: re.Match[str]) -> str | None:
     ticks = match.group("ticks")
     content = match.group("content").strip()
-    if len(ticks) == 1 and content in _SAFE_INLINE_LABELS:
+    if len(ticks) != 1 or not 1 <= len(content) <= 32:
+        return None
+    if content in _SAFE_INLINE_LABELS:
         return content
-    is_label = (
-        len(ticks) == 1
-        and 1 <= len(content) <= 32
-        and all(
-            char.isalnum() or char.isspace() or char == "-"
-            for char in content
-        )
-    )
-    return content if is_label else None
+    text = _remove_unicode_controls(content)
+    text = text.translate(_DOUBLE_QUOTE_TRANSLATION)
+    text = _replace_plain_markdown_containers(text)
+    text = _URL_RE.sub("链接", text)
+    text = _PATH_RE.sub("相关文件", text)
+    return text.strip() or None
 
 
 def _append_fragment(

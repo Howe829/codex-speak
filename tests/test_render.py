@@ -146,6 +146,22 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
+    def test_preserves_ordered_list_labels_for_speech(self) -> None:
+        cases = {
+            "1. 第一项\n2. 第二项\n3. 第三项": (
+                "1. 第一项 2. 第二项 3. 第三项"
+            ),
+            "1) 第一项\n2) 第二项\n3) 第三项": (
+                "1) 第一项 2) 第二项 3) 第三项"
+            ),
+            "一、第一项\n二、第二项\n三、第三项": (
+                "一、第一项 二、第二项 三、第三项"
+            ),
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
     def test_fenced_code_and_image_alt_use_exact_spoken_placeholders(self) -> None:
         body = "![订单截图](/private/order.png)\n```python\nsecret = 1\n```"
         self.assertEqual(normalize_full_text(body), "订单截图 图片 代码块")
@@ -194,43 +210,56 @@ class RenderTests(unittest.TestCase):
     def test_preserves_hooks_command_without_exposing_inline_paths(self) -> None:
         cases = {
             "`/hooks`": "/hooks",
-            "`/private`": "代码",
-            "`/Users/private`": "代码",
+            "`/private`": "相关文件",
+            "`/Users/private`": "相关文件",
         }
         for body, expected in cases.items():
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
-    def test_replaces_code_shaped_and_ambiguous_inline_spans(self) -> None:
+    def test_preserves_all_short_single_backtick_content(self) -> None:
+        cases = {
+            "`x=1`": "x=1",
+            "`run()`": "run()",
+            "`a | b`": "a | b",
+            "`1.`": "1.",
+            "`1)`": "1)",
+            "`一、`": "一、",
+            "`1. 第一项`": "1. 第一项",
+            "`一、第一项`": "一、第一项",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_short_inline_content_still_gets_global_privacy_cleanup(self) -> None:
+        cases = {
+            '`"secret"`': "secret",
+            "`“secret”`": "secret",
+            "`https://example.com`": "链接",
+            "`~/secret`": "相关文件",
+            "`[label](https://x.co)`": "label 链接",
+            "`![image](/private/a.png)`": "image 图片",
+            "`snake_case`": "snake_case",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_short_inline_content_removes_controls_after_length_check(self) -> None:
+        cases = {
+            "`sec\u200bret`": "secret",
+            "`a\x00b`": "ab",
+            "`" + "a" * 32 + "\u200b`": "代码",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
+
+    def test_long_or_multi_backtick_content_remains_code(self) -> None:
         cases = (
-            "`x=1`",
-            "`run()`",
-            "`~/secret`",
-            "`a | b`",
             "`" + "a" * 33 + "`",
             "``plain label``",
-        )
-        for body in cases:
-            with self.subTest(body=body):
-                self.assertEqual(normalize_full_text(body), "代码")
-
-    def test_classifies_original_inline_content_before_normalizing_it(self) -> None:
-        cases = (
-            '`"secret"`',
-            "`“secret”`",
-            "`[label](https://example.com)`",
-            "`![image](/private/image.png)`",
-            "`snake_case`",
-        )
-        for body in cases:
-            with self.subTest(body=body):
-                self.assertEqual(normalize_full_text(body), "代码")
-
-    def test_classifies_inline_content_before_removing_controls(self) -> None:
-        cases = (
-            "`sec\u200bret`",
-            "`a\x00b`",
-            "`" + "a" * 32 + "\u200b`",
         )
         for body in cases:
             with self.subTest(body=body):
@@ -308,17 +337,17 @@ class RenderTests(unittest.TestCase):
         cases = (
             (
                 "[see `]`](LINK_SECRET)",
-                "see 代码 链接",
+                "see ] 链接",
                 ("LINK_SECRET",),
             ),
             (
                 "![see `]`](IMAGE_SECRET)",
-                "see 代码 图片",
+                "see ] 图片",
                 ("IMAGE_SECRET",),
             ),
             (
                 "[![see `]`](INNER_SECRET)](OUTER_SECRET)",
-                "see 代码 图片 链接",
+                "see ] 图片 链接",
                 ("INNER_SECRET", "OUTER_SECRET"),
             ),
         )
@@ -405,10 +434,10 @@ class RenderTests(unittest.TestCase):
 
         self.assertEqual(
             normalized,
-            "Full 代码 " + " ".join(descriptors),
+            "Full x=1 " + " ".join(descriptors),
         )
         self.assertNotIn("/s", normalized)
-        self.assertNotIn("x=1", normalized)
+        self.assertIn("x=1", normalized)
         self.assertNotIn("\ue000", normalized)
 
     def test_reassembles_multiple_labels_without_internal_artifacts(self) -> None:

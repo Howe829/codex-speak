@@ -284,7 +284,20 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             extract_response(marker("completed", speech)),
-            ParsedResponse("completed", "完成 修复 移除 截图 与 旧方案。", ""),
+            ParsedResponse(
+                "completed", "完成 修复 1. 移除 截图 与 旧方案。", ""
+            ),
+        )
+
+    def test_preserves_chinese_ordered_list_labels_in_summary(self) -> None:
+        speech = "一、完成修复。\n二、验证结果。\n三、准备发布。"
+        self.assertEqual(
+            extract_response(marker("completed", speech)),
+            ParsedResponse(
+                "completed",
+                "一、完成修复。 二、验证结果。 三、准备发布。",
+                "",
+            ),
         )
 
     def test_controls_cannot_bypass_markdown_recognition(self) -> None:

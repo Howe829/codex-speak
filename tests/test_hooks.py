@@ -452,7 +452,9 @@ class HookTests(unittest.TestCase):
             self.assertIsNotNone(event)
             self.assertEqual(event.mode, "full")
             self.assertEqual(event.status, "silent")
-            self.assertEqual(event.segments, ("标题 正文含有 代码 和 链接",))
+            self.assertEqual(
+                event.segments, ("标题 正文含有 secret() 和 链接",)
+            )
             self.assertEqual(started, [(Path(temporary), data_dir)])
 
     def test_non_macos_is_best_effort_and_does_not_enqueue(self) -> None:

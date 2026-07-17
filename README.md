@@ -40,8 +40,8 @@ SessionStart protocol and hook paths bind to the installed version.
 
 ## Release status and Stop-hook upgrades
 
-The current public Marketplace release is version 0.2.8.
-The source ref is `v0.2.8`.
+The current public Marketplace release is version 0.2.9.
+The source ref is `v0.2.9`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -76,12 +76,14 @@ The menu bar checkmark selects one speech mode:
   active; only new eligible events play.
 - `Summary` speaks only important `completed`, `blocked`, or
   `action_required` outcome text. Ordinary `silent` answers remain quiet.
-- `Full` reads the normalized visible response. Markdown formatting, code,
-  URLs, and local paths are replaced with speech-safe descriptions. Double-
-  quote delimiters are removed so macOS speaks their enclosed text, and short
-  prose labels in single backticks are spoken as visible text while code-shaped
-  spans retain the `代码` placeholder. The public `/hooks` command label stays
-  visible without relaxing the fail-closed handling of arbitrary local paths.
+- `Full` reads the normalized visible response. Markdown formatting, code
+  blocks, URLs, and local paths are replaced with speech-safe descriptions.
+  Double-quote delimiters are removed so macOS speaks their enclosed text.
+  Any non-empty single-backtick span up to 32 characters is spoken as text,
+  including punctuation and code-shaped content, after URL, path, and control-
+  character privacy cleaning. Longer spans and multi-backtick spans retain the
+  `代码` placeholder. The public `/hooks` command label stays visible without
+  relaxing the fail-closed handling of arbitrary local paths.
   Full speech runs one sentence per local `say` process, with oversized
   sentences split again at 180 characters, so a voice-engine early completion
   cannot discard every later sentence in the response.
@@ -162,7 +164,9 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-Version 0.2.8 is the current Marketplace release and preserves the public
+Version 0.2.9 is the current Marketplace release and preserves ordered-list
+labels while treating every non-empty single-backtick span up to 32 characters
+as spoken text after privacy cleaning. Version 0.2.8 preserved the public
 `/hooks` command label in Full mode while isolating sentences into bounded
 local `say` calls to prevent later speech from being lost when a voice engine
 finishes early. Version 0.2.7 added the production logo and GitHub homepage to

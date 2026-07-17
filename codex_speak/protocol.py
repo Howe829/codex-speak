@@ -33,7 +33,7 @@ _ABSOLUTE_PATH_RE = re.compile(
 )
 _MARKDOWN_LINK_RE = re.compile(r"!?\[([^\]\r\n]*)\]\([^\)\r\n]*\)")
 _MARKDOWN_LINE_PREFIX_RE = re.compile(
-    r"(?m)^[ \t]*(?:>[ \t]*(?:(?:[-+*]|\d+[.)])[ \t]+)?|(?:[-+*]|\d+[.)])[ \t]+)"
+    r"(?m)^[ \t]*(?:>[ \t]*(?:[-+*][ \t]+)?|[-+*][ \t]+)"
 )
 _STRIKETHROUGH_RE = re.compile(r"~~")
 _MARKDOWN_RE = re.compile(r"[`*_#]+")
