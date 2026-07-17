@@ -22,7 +22,116 @@ def marker_v2(status: str, text: str) -> str:
     return f"[codex-speak-v2]: <codex-speak:v2#{payload}>"
 
 
+def marker_v3(status: str, lead: str, text: str) -> str:
+    payload = json.dumps(
+        {"status": status, "speech_lead": lead, "speech_text": text},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"[codex-speak-v3]: <codex-speak:v3#{payload}>"
+
+
 class ProtocolTests(unittest.TestCase):
+    def test_extracts_v3_lead_and_preserves_v1_v2(self) -> None:
+        self.assertEqual(
+            extract_response(
+                "正文\n\n"
+                + marker_v3(
+                    "completed",
+                    "豪哥，任务：{{task_title}}已完成。",
+                    "正文结果。",
+                )
+            ),
+            ParsedResponse(
+                "completed",
+                "正文结果。",
+                "正文",
+                "豪哥，任务：{{task_title}}已完成。",
+            ),
+        )
+        self.assertEqual(
+            extract_response("正文\n\n" + marker_v2("completed", "完成。")),
+            ParsedResponse("completed", "完成。", "正文"),
+        )
+        self.assertEqual(
+            extract_response(marker("completed", "完成。")),
+            ParsedResponse("completed", "完成。", ""),
+        )
+
+    def test_v3_accepts_each_important_status_and_silent(self) -> None:
+        leads = {
+            "completed": "任务：{{task_title}}已完成。",
+            "blocked": "任务：{{task_title}}遇到阻塞。",
+            "action_required": "任务：{{task_title}}需要你处理。",
+        }
+        for status, lead in leads.items():
+            with self.subTest(status=status):
+                self.assertEqual(
+                    extract_response(marker_v3(status, lead, "正文。")),
+                    ParsedResponse(status, "正文。", "", lead),
+                )
+        self.assertEqual(
+            extract_response(marker_v3("silent", "", "")),
+            ParsedResponse("silent", "", "", ""),
+        )
+
+    def test_v3_requires_exact_keys_and_one_title_placeholder(self) -> None:
+        invalid_payloads = (
+            {"status": "completed", "speech_text": "正文。"},
+            {
+                "status": "completed",
+                "speech_lead": "任务已完成。",
+                "speech_text": "正文。",
+            },
+            {
+                "status": "completed",
+                "speech_lead": "{{task_title}}{{task_title}}",
+                "speech_text": "正文。",
+            },
+            {
+                "status": "completed",
+                "speech_lead": "任务：{{task_title}}已完成。",
+                "speech_text": "",
+            },
+            {
+                "status": "completed",
+                "speech_lead": "任务：{{task_title}}已完成。",
+                "speech_text": "正文。",
+                "extra": True,
+            },
+            {
+                "status": "silent",
+                "speech_lead": "任务：{{task_title}}",
+                "speech_text": "",
+            },
+            {"status": "silent", "speech_lead": "", "speech_text": "不要播"},
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                message = f"[codex-speak-v3]: <codex-speak:v3#{encoded}>"
+                self.assertIsNone(extract_response(message))
+
+    def test_v3_rejects_mixed_duplicate_unsafe_and_overlong_leads(self) -> None:
+        valid = marker_v3(
+            "completed", "任务：{{task_title}}已完成。", "正文。"
+        )
+        self.assertIsNone(extract_response(valid + "\n" + valid))
+        self.assertIsNone(extract_response(valid + "\n" + marker_v2("completed", "完成")))
+        self.assertIsNone(
+            extract_response(
+                marker_v3(
+                    "completed",
+                    "任务：{{task_title}}<已完成。",
+                    "正文。",
+                )
+            )
+        )
+        overlong = "甲" * 120 + "{{task_title}}"
+        self.assertIsNone(
+            extract_response(marker_v3("completed", overlong, "正文。"))
+        )
+
     def test_extracts_hidden_v2_marker_and_keeps_v1_transition(self) -> None:
         self.assertEqual(
             extract_response("正文\n\n" + marker_v2("completed", "完成。")),
