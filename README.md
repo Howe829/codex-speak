@@ -20,17 +20,23 @@ or global Codex `notify` setting.
 
 ## Install and trust
 
-The personal Marketplace source is `/Users/howard/plugins/codex-speak`, with
-its entry in `/Users/howard/.agents/plugins/marketplace.json`:
+Register the public GitHub repository as a Codex marketplace:
 
 ```bash
-codex plugin add codex-speak@personal
+codex plugin marketplace add Howe829/codex-speak --ref main
+```
+
+Open Codex, enter `/plugins`, select **Howe829 Plugins**, open **Codex Speak**,
+and install it. The equivalent CLI command is:
+
+```bash
+codex plugin add codex-speak@howe829
 ```
 
 Open `/hooks` after installation, review the bundled `SessionStart` and `Stop`
 commands, and trust the current definitions. Codex asks again when a hook
-definition changes. Start a new thread after installation or reinstall so the
-SessionStart protocol becomes active.
+definition changes. Start a new task after installation or reinstall so the
+SessionStart protocol and hook paths bind to the installed version.
 
 The embedded app is built and ad hoc signed locally. macOS may ask for local
 execution approval if the checkout or app was downloaded or quarantined;
@@ -108,7 +114,7 @@ rebuild or reinstall the helper to restore interactive controls.
 ## Migrate from the legacy plugin
 
 Disable or uninstall `codex-voice-notifier` before enabling Codex Speak so two
-plugins do not announce the same turn. Install `codex-speak@personal`, trust
+plugins do not announce the same turn. Install `codex-speak@howe829`, trust
 its current hooks in `/hooks`, and start a new thread. Old runtime data is not
 imported; mode and queue state begin cleanly under the Codex Speak plugin data
 directory.
@@ -120,10 +126,9 @@ comment until a new task loads the v2 SessionStart instructions.
 
 ## Test and validate
 
-From the development checkout:
+From the repository root:
 
 ```bash
-cd /Users/howard/plugins/codex-speak
 PYTHONPYCACHEPREFIX=/private/tmp/codex-speak-pycache \
   python3 -m unittest discover -s tests -v
 PYTHONPYCACHEPREFIX=/private/tmp/codex-speak-pycache \
@@ -137,11 +142,13 @@ dependency. It imports PyYAML, so create a disposable environment when the
 workspace validator environment is unavailable:
 
 ```bash
+export REPO_ROOT="$(pwd)"
+export PLUGIN_CREATOR_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator"
 python3 -m venv /private/tmp/codex-plugin-validator
 /private/tmp/codex-plugin-validator/bin/python -m pip install PyYAML
 /private/tmp/codex-plugin-validator/bin/python \
-  /Users/howard/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py \
-  /Users/howard/plugins/codex-speak
+  "$PLUGIN_CREATOR_ROOT/scripts/validate_plugin.py" \
+  "$REPO_ROOT"
 ```
 
 ## Build the universal menu helper
@@ -167,30 +174,33 @@ app without altering its contents, submit it to Apple for notarization, staple
 the ticket, and verify both Gatekeeper and `codesign` before sharing. Never
 describe an ad hoc build as notarized or Developer ID signed.
 
-## Update a local installation
+## Update an installation
 
-After source or embedded-app changes, refresh the immutable Marketplace
-cachebuster with the supported helper and reinstall:
+Refresh the registered marketplace and reinstall the current plugin version:
 
 ```bash
-python3 /Users/howard/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py \
-  /Users/howard/plugins/codex-speak
-python3 /Users/howard/.codex/skills/.system/plugin-creator/scripts/read_marketplace_name.py
-codex plugin add codex-speak@personal
+codex plugin marketplace upgrade howe829
+codex plugin add codex-speak@howe829
 ```
 
-Review changed definitions in `/hooks` and start a new thread afterward.
+Review changed definitions in `/hooks` and start a new task afterward. If an
+older task reports a missing cached hook after reinstall, close that task and
+continue in the new one; tasks bind lifecycle hook paths when they start.
 
 ## Troubleshooting
 
+- Marketplace registration fails: verify GitHub access to the public
+  `Howe829/codex-speak` repository, run `codex plugin marketplace list` to
+  inspect registered marketplaces, then retry the registration command.
 - No speech: confirm `Plugin Toggle` is enabled, then review and trust both
   bundled hooks in `/hooks`.
 - No speech in an existing thread: start a new thread so SessionStart injects
   the protocol.
 - A speech-control comment is visible below a response: the task still has the
   pre-0.2.1 protocol; start a new task after reinstalling and trusting hooks.
-- Menu missing but speech works: the Python fallback is active; rebuild the
-  embedded app and reinstall after updating the cachebuster.
+- Menu missing but speech works: the Python fallback is active; run
+  `codex plugin marketplace upgrade howe829`, reinstall with
+  `codex plugin add codex-speak@howe829`, and start a new task.
 - Menu opens but actions fail: verify `python3` is still executable and the
   helper was launched by a current trusted hook so active-Python propagation
   is intact.
@@ -199,6 +209,6 @@ Review changed definitions in `/hooks` and start a new thread afterward.
 - Ordinary answers are silent in Summary mode by design; select Full if the
   visible response should be read.
 - Quoted text or a short backtick label is skipped in Full mode: confirm the
-  installed plugin version begins with `0.2.3+codex.` and reinstall it if not.
+  installed plugin version is `0.2.3 or newer` and reinstall it if not.
 - Concurrent announcements are FIFO and play one at a time; use Clear Pending
   Speeches to discard the queue or Stop Current Speech to cancel playback.

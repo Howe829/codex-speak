@@ -352,10 +352,11 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         for required in (
-            "codex plugin add codex-speak@personal",
+            "codex plugin marketplace add Howe829/codex-speak --ref main",
+            "codex plugin add codex-speak@howe829",
             "/hooks",
-            "new thread",
-            "update_plugin_cachebuster.py",
+            "new task",
+            "codex plugin marketplace upgrade howe829",
             "PLUGIN_DATA",
             "five minutes",
             "AGENTS.md",

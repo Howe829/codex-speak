@@ -93,6 +93,35 @@ def _read_png_rgba(path: Path) -> tuple[int, int, list[bytes]]:
 
 
 class PackagingTests(unittest.TestCase):
+    def test_public_marketplace_exposes_codex_speak_from_github(self) -> None:
+        marketplace_path = ROOT / ".agents" / "plugins" / "marketplace.json"
+        self.assertTrue(marketplace_path.is_file(), marketplace_path)
+        marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        expected = {
+            "name": "howe829",
+            "interface": {"displayName": "Howe829 Plugins"},
+            "plugins": [
+                {
+                    "name": "codex-speak",
+                    "source": {
+                        "source": "url",
+                        "url": "https://github.com/Howe829/codex-speak.git",
+                        "ref": "main",
+                    },
+                    "policy": {
+                        "installation": "AVAILABLE",
+                        "authentication": "ON_INSTALL",
+                    },
+                    "category": "Productivity",
+                }
+            ],
+        }
+        self.assertEqual(marketplace, expected)
+        self.assertEqual(marketplace["plugins"][0]["name"], manifest["name"])
+
     def test_readme_displays_only_the_production_public_icon(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("![Codex Speak icon](assets/codex-speak-github.png)", readme)
@@ -622,7 +651,7 @@ class PackagingTests(unittest.TestCase):
             signature_details.stdout + signature_details.stderr,
         )
 
-    def test_readme_locks_exact_menu_order_and_marketplace_version_prefix(self) -> None:
+    def test_readme_locks_exact_menu_order_and_public_installation(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         exact_menu = """1. `Silent`
 2. `Summary`
@@ -631,8 +660,41 @@ class PackagingTests(unittest.TestCase):
 5. `Clear Pending Speeches`
 6. `Quit Codex Speak`"""
         self.assertIn(exact_menu, readme)
-        prefixes = set(re.findall(r"\d+\.\d+\.\d+\+codex\.", readme))
-        self.assertEqual(prefixes, {"0.2.3+codex."})
+        for required in (
+            "codex plugin marketplace add Howe829/codex-speak --ref main",
+            "/plugins",
+            "codex plugin add codex-speak@howe829",
+            "codex plugin marketplace upgrade howe829",
+            "GitHub access",
+            "codex plugin marketplace list",
+            "0.2.3 or newer",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, readme)
+        for forbidden in (
+            "codex-speak@personal",
+            "~/.agents/plugins/marketplace.json",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, readme)
+        self.assertNotRegex(readme, r"/Users/[^/\s]+")
+        self.assertNotIn("cachebuster", readme.lower())
+
+    def test_maintainer_release_doc_uses_portable_named_roots(self) -> None:
+        path = ROOT / "docs" / "maintainers" / "local-release.md"
+        self.assertTrue(path.is_file(), path)
+        document = path.read_text(encoding="utf-8")
+        for required in (
+            "$DEV_PLUGIN_ROOT",
+            "$FORMAL_PLUGIN_ROOT",
+            "$PLUGIN_CREATOR_ROOT",
+            "update_plugin_cachebuster.py",
+            "codex plugin add codex-speak@personal",
+            "start a new task",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, document)
+        self.assertNotRegex(document, r"/Users/[^/\s]+")
 
     def test_build_script_is_local_and_builds_both_release_architectures(self) -> None:
         script = (ROOT / "scripts" / "build_menu_app.sh").read_text(
