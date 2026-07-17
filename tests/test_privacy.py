@@ -46,6 +46,7 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         self.assertNotRegex(command, r"\$\{?(?:INPUT|HOOK_INPUT|stdin)\}?")
         self.assertEqual(command.count("${PLUGIN_DATA}"), 2)
         self.assertEqual(command.count("${PLUGIN_ROOT}"), 1)
+
     def test_task_title_and_app_server_failure_never_enter_diagnostics(self) -> None:
         title_secret = "PRIVATE_TASK_TITLE_48291"
         server_secret = "PRIVATE_APP_SERVER_ERROR_59317"

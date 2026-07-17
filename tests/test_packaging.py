@@ -37,6 +37,9 @@ def make_fake_runtime(family: Path, version: str) -> Path:
         "expected = Path(__file__).resolve().parents[1]\n"
         "if Path(os.environ['PLUGIN_ROOT']).resolve() != expected:\n"
         "    raise SystemExit(7)\n"
+        "environment_canary = os.environ.get('UNRELATED_HANDOFF_CANARY')\n"
+        "if environment_canary is not None:\n"
+        "    sys.stdout.write(f'env:{environment_canary}\\n')\n"
         "sys.stdout.write(sys.stdin.read())\n",
         encoding="utf-8",
     )
@@ -136,6 +139,7 @@ class PackagingTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["PLUGIN_ROOT"] = str(version_a)
             environment["PLUGIN_DATA"] = str(data_dir)
+            environment["UNRELATED_HANDOFF_CANARY"] = "preserved-through-handoff"
             completed = subprocess.run(
                 captured_command,
                 shell=True,
@@ -147,7 +151,10 @@ class PackagingTests(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertEqual(completed.stdout, canary)
+            self.assertEqual(
+                completed.stdout,
+                "env:preserved-through-handoff\n" + canary,
+            )
             self.assertEqual(completed.stderr, "")
             self.assertTrue(version_b.is_dir())
             self.assertNotIn("PRIVATE-UPGRADE-CANARY", captured_command)
@@ -319,12 +326,17 @@ class PackagingTests(unittest.TestCase):
 
     def test_python_plugin_entries_do_not_write_bytecode_into_installed_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            manifest = json.loads(
+                (ROOT / ".codex-plugin" / "plugin.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             installed_root = (
                 Path(temporary)
                 / "cache"
                 / "howe829"
                 / "codex-speak"
-                / "0.2.5"
+                / manifest["version"]
             )
             installed_root.mkdir(parents=True)
             ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
@@ -342,6 +354,19 @@ class PackagingTests(unittest.TestCase):
                 ROOT / "hooks",
                 installed_root / "hooks",
                 ignore=ignore_bytecode,
+            )
+            stop_sentinel = Path(temporary) / "installed-stop-executed"
+            installed_stop = installed_root / "hooks" / "stop.py"
+            stop_source = installed_stop.read_text(encoding="utf-8")
+            future_import = "from __future__ import annotations\n"
+            self.assertTrue(stop_source.startswith(future_import))
+            installed_stop.write_text(
+                future_import
+                + "\nfrom pathlib import Path as _SentinelPath\n"
+                + f"_SentinelPath({str(stop_sentinel)!r}).write_text("
+                + "'executed', encoding='utf-8')\n"
+                + stop_source[len(future_import) :],
+                encoding="utf-8",
             )
             data_dir = Path(temporary) / "plugin-data"
             environment = os.environ.copy()
@@ -396,6 +421,13 @@ class PackagingTests(unittest.TestCase):
                         check=True,
                         capture_output=True,
                     )
+                    if arguments[2:] == [
+                        str(data_dir / "runtime-hooks" / "stop_launcher.py")
+                    ]:
+                        self.assertEqual(
+                            stop_sentinel.read_text(encoding="utf-8"),
+                            "executed",
+                        )
 
             bytecode = [
                 path.relative_to(installed_root)

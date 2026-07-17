@@ -6,6 +6,17 @@
 
 **Architecture:** SessionStart atomically copies a standalone standard-library launcher into the stable private `PLUGIN_DATA` directory. The Stop command prefers that launcher; when the original plugin version is gone, the launcher selects the highest valid real Codex Speak sibling from the same Marketplace/plugin cache family and replaces itself with that version's Stop hook while preserving stdin, stdout, and environment.
 
+> **Approved security amendment (2026-07-17 final review):** The human approved
+> descriptor safety over this plan's direct-path execution detail. The launcher
+> opens and enumerates the same-family directory through a validated
+> `O_DIRECTORY | O_NOFOLLOW` descriptor, opens the selected Stop regular file
+> relative to validated directory descriptors, and hands that exact inheritable
+> file descriptor to a fixed `python3 -B -c` bootstrap. The bootstrap consumes
+> and closes the descriptor before executing the source with the trusted path as
+> `__file__` and with direct-script import semantics. This amendment supersedes
+> the path revalidation and `python3 -B CURRENT_ROOT/hooks/stop.py` instructions
+> below; the historical TDD steps remain unchanged.
+
 **Tech Stack:** Python 3.10+ standard library, Codex lifecycle hooks, POSIX shell command configuration, `unittest`, existing macOS Swift helper tests, Codex plugin validator.
 
 ## Global Constraints

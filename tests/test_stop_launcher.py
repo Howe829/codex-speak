@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -118,6 +119,47 @@ class StopLauncherTests(unittest.TestCase):
             )
             self.assertIsNone(select_stop_hook(original))
 
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_rejects_cross_marketplace_family_symlink_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            trusted_marketplace = base / "trusted-marketplace" / "codex-speak"
+            outside_family = base / "outside-marketplace" / "codex-speak"
+            marker = base / "outside-stop-executed"
+            create_runtime(
+                outside_family,
+                "9.0.0",
+                stop_source=(
+                    "from pathlib import Path\n"
+                    f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+                    "print('outside')\n"
+                ),
+            )
+            trusted_marketplace.parent.mkdir(parents=True)
+            trusted_marketplace.symlink_to(outside_family, target_is_directory=True)
+            original = trusted_marketplace / "0.2.5"
+
+            self.assertIsNone(select_stop_hook(original))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(
+                        Path(__file__).resolve().parent.parent
+                        / "hooks"
+                        / "stop_launcher.py"
+                    ),
+                ],
+                capture_output=True,
+                check=False,
+                env={"PLUGIN_ROOT": str(original)},
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "{}\n")
+            self.assertEqual(result.stderr, "")
+            self.assertFalse(marker.exists())
+
     def test_rejects_family_with_more_than_candidate_scan_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             family = Path(temporary) / "howe829" / "codex-speak"
@@ -156,6 +198,86 @@ class StopLauncherTests(unittest.TestCase):
                 self.assertEqual(main(), 0)
             self.assertEqual(stdout.getvalue(), "{}\n")
             self.assertEqual(stderr.getvalue(), "")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_validated_stop_descriptor_survives_post_validation_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            family = base / "howe829" / "codex-speak"
+            root = create_runtime(
+                family,
+                "0.2.6",
+                stop_source=(
+                    "import os\n"
+                    "leaked = []\n"
+                    "for descriptor in range(3, 64):\n"
+                    "    try:\n"
+                    "        os.fstat(descriptor)\n"
+                    "    except OSError:\n"
+                    "        continue\n"
+                    "    leaked.append(descriptor)\n"
+                    "print('original' if not leaked else f'leaked:{leaked}')\n"
+                ),
+            )
+            outside_marker = base / "outside-stop-executed"
+            outside_stop = base / "outside-stop.py"
+            outside_stop.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(outside_marker)!r}).write_text("
+                "'executed', encoding='utf-8')\n"
+                "print('outside')\n",
+                encoding="utf-8",
+            )
+            ready = base / "exec-ready"
+            release = base / "exec-release"
+            driver = (
+                "import os\n"
+                "from pathlib import Path\n"
+                "import sys\n"
+                "import time\n"
+                "from hooks import stop_launcher\n"
+                "ready = Path(sys.argv[1])\n"
+                "release = Path(sys.argv[2])\n"
+                "real_execv = os.execv\n"
+                "def delayed_execv(path, arguments):\n"
+                "    ready.write_text('ready', encoding='utf-8')\n"
+                "    deadline = time.monotonic() + 10\n"
+                "    while not release.exists():\n"
+                "        if time.monotonic() >= deadline:\n"
+                "            raise OSError('release timeout')\n"
+                "        time.sleep(0.01)\n"
+                "    real_execv(path, arguments)\n"
+                "stop_launcher.os.execv = delayed_execv\n"
+                "raise SystemExit(stop_launcher.main())\n"
+            )
+            environment = os.environ.copy()
+            environment["PLUGIN_ROOT"] = str(root)
+            process = subprocess.Popen(
+                [sys.executable, "-B", "-c", driver, str(ready), str(release)],
+                cwd=Path(__file__).resolve().parent.parent,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.addCleanup(lambda: process.poll() is None and process.kill())
+            deadline = time.monotonic() + 10
+            while not ready.exists() and process.poll() is None:
+                if time.monotonic() >= deadline:
+                    self.fail("launcher did not reach the exec boundary")
+                time.sleep(0.01)
+            self.assertIsNone(process.poll())
+
+            stop_hook = root / "hooks" / "stop.py"
+            stop_hook.unlink()
+            stop_hook.symlink_to(outside_stop)
+            release.write_text("release", encoding="utf-8")
+            stdout, stderr = process.communicate(timeout=10)
+
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(stdout, "original\n")
+            self.assertEqual(stderr, "")
+            self.assertFalse(outside_marker.exists())
 
     def test_direct_script_execution_emits_empty_result_for_missing_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

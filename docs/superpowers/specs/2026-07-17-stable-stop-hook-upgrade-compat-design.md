@@ -80,15 +80,25 @@ versioned plugin tree.
 
 The launcher receives the task's original `PLUGIN_ROOT` and stable
 `PLUGIN_DATA` environment from Codex. It does not parse hook stdin. Once it has
-selected a valid current Stop hook, it sets `PLUGIN_ROOT` to that current root
-and uses `os.execv` to replace itself with:
+selected a valid current Stop hook, it sets `PLUGIN_ROOT` to that current root.
+It opens the selected Stop source with no-follow semantics through the already
+validated family, candidate, and hooks directory descriptors, marks only that
+validated regular-file descriptor inheritable, and uses `os.execv` to replace
+itself with a fixed standard-library bootstrap:
 
 ```text
-python3 -B CURRENT_ROOT/hooks/stop.py
+python3 -B -c FIXED_BOOTSTRAP VALIDATED_STOP_FD TRUSTED_STOP_PATH
 ```
 
-Standard input, standard output, and the existing environment remain attached,
-so speech content never appears in arguments or launcher storage.
+The bootstrap consumes and closes the descriptor, compiles that exact opened
+source with the trusted Stop path as `__file__`, restores direct-script
+`sys.argv` and import-path semantics, and then executes it as `__main__`.
+Consequently a rename or symlink replacement after validation cannot change the
+executed Stop source, and the descriptor cannot leak into later worker/helper
+children. Standard input, standard output, standard error, and every existing
+environment value remain attached; only `PLUGIN_ROOT` is intentionally updated.
+Speech content never appears in arguments, environment updates, launcher
+storage, hashes, diagnostics, or error output.
 
 ### Atomic launcher installation
 
@@ -137,16 +147,20 @@ The launcher follows this order:
 1. If the task's original real, non-symlink Stop hook still exists and its
    manifest is valid, execute it. This preserves exact-version behavior when
    Codex later begins retaining old caches.
-2. Otherwise, inspect only direct children of the original version directory's
-   parent, which is the same Marketplace/plugin cache family.
+2. Open the original version directory's parent using
+   `O_DIRECTORY | O_NOFOLLOW`, validate the opened directory identity against
+   the family path, and enumerate only its direct children through that anchored
+   descriptor. A symlinked family or an identity change fails closed.
 3. Ignore symlink roots, non-directories, unreadable entries, version names
    outside the supported numeric release/build format, manifests with a name
    other than `codex-speak`, manifest versions that differ from the directory
    name, and symlinked or missing Stop hook files.
 4. Select the highest valid numeric version. A formal `+codex.*` build is used
    only as a deterministic tie-breaker within the same numeric version.
-5. Resolve and recheck containment before execution to prevent path traversal
-   or a time-of-check path escape.
+5. Open and validate candidate directories, manifests, hooks directories, and
+   the Stop regular file relative to their already-open parent descriptors.
+   Recheck the family identity before handoff, then execute only the opened Stop
+   descriptor rather than reopening its path.
 
 The scan never crosses to another Marketplace directory and performs no
 network access.
@@ -154,7 +168,8 @@ network access.
 ## Failure Handling and Privacy
 
 - If no valid runtime exists, write exactly `{}` plus a newline and exit zero.
-- If candidate inspection or `execv` fails, do the same without writing stderr.
+- If family opening, candidate inspection, descriptor handoff, or `execv`
+  fails, do the same without writing stderr.
 - The launcher never reads, logs, hashes, copies, or persists hook stdin.
 - The only persistent code is the fixed launcher source itself, protected by
   the existing private plugin-data directory.
@@ -185,8 +200,14 @@ already captured by older tasks. Therefore:
 - Concurrent installers always leave one complete valid launcher.
 - The resolver accepts the original valid root, then accepts a newer valid
   sibling after the original is deleted.
-- It rejects symlink roots/hooks, wrong names, mismatched versions, malformed
-  manifests, nested paths, and unsupported version strings.
+- It rejects symlink families/roots/hooks, family identity changes, wrong names,
+  mismatched versions, malformed manifests, nested paths, and unsupported
+  version strings.
+- A deterministic cross-Marketplace family-symlink regression proves that no
+  external runtime is selected or executed.
+- A deterministic post-validation replacement regression proves that the
+  originally opened Stop source executes and that its inherited descriptor is
+  closed before Stop code can start children.
 - Missing or fully invalid runtime state produces only the empty hook result.
 
 ### Real-process upgrade regression
@@ -197,8 +218,9 @@ Create a temporary Marketplace-like cache and stable plugin-data directory:
 2. Capture the stable Stop command as an old task would.
 3. Delete version A and create version B.
 4. Invoke the captured command with `PLUGIN_ROOT` still pointing to version A.
-5. Assert version B's Stop hook receives stdin unchanged and produces the
-   expected stdout, with no stderr and no message content in argv or files.
+5. Assert version B's Stop hook receives stdin unchanged, retains an unrelated
+   environment canary, and produces the expected stdout, with no stderr and no
+   message content in argv, environment updates, or files.
 
 Also verify the shell fallback when no stable launcher exists.
 
