@@ -209,6 +209,8 @@ class PackagingTests(unittest.TestCase):
         }
         self.assertEqual(marketplace, expected)
         self.assertEqual(marketplace["plugins"][0]["name"], manifest["name"])
+        self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.5")
+        self.assertTrue(manifest["version"].startswith("0.2.6"))
 
     def test_readme_displays_only_the_production_public_icon(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -415,7 +417,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "codex-speak")
         self.assertRegex(
             manifest["version"],
-            r"^0\.2\.5(?:\+codex\.[a-z0-9-]+)?$",
+            r"^0\.2\.6(?:\+codex\.[a-z0-9-]+)?$",
         )
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(

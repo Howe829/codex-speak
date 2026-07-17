@@ -38,6 +38,31 @@ commands, and trust the current definitions. Codex asks again when a hook
 definition changes. Start a new task after installation or reinstall so the
 SessionStart protocol and hook paths bind to the installed version.
 
+## Candidate status and Stop-hook upgrades
+
+This repository's source candidate is version 0.2.6. The public Marketplace
+release remains version 0.2.5, including its `v0.2.5` ref, until 0.2.6 is
+separately published; this document does not mean that 0.2.6 is already
+published or installed.
+
+On SessionStart, the plugin installs a private fixed launcher at
+`runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
+launcher. The launcher considers only real, valid direct version siblings from
+the same Marketplace and plugin cache family before it selects the current
+runtime. Hook stdin and speech text are piped directly to the selected Stop
+process: no speech content is stored in the launcher, command arguments, or
+diagnostics.
+
+This creates a one-time boundary at the first fixed release. As a result,
+pre-fix open tasks cannot be retroactively repaired by the new hook definition
+because they already captured their old command; replace each with a new task.
+In contrast, tasks started on the fixed release survive later upgrades, even when a
+Marketplace cache replacement removes the original version directory.
+
+If a valid runtime is missing, the launcher fails with an empty hook result
+instead of exposing a Python path error. Reinstall the plugin and start a new
+task to establish a valid fixed launcher and current runtime.
+
 The embedded app is built and ad hoc signed locally. macOS may ask for local
 execution approval if the checkout or app was downloaded or quarantined;
 review its origin before approving it. Do not bypass Gatekeeper for an app you
@@ -135,11 +160,9 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-This repository's current release is version 0.2.5.
-
-Version 0.2.5 introduces the v3 SessionStart marker for task-title leads. The
-parser retains v1 and v2 compatibility, but existing tasks keep their original
-protocol behavior until a newly started task loads v3.
+The Marketplace release remains version 0.2.5 while this repository prepares
+the 0.2.6 source candidate. Version 0.2.5 introduced the v3 SessionStart
+marker for task-title leads; the parser retains v1 and v2 compatibility.
 
 ## Test and validate
 
