@@ -171,6 +171,20 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertIsNone(extract_response(marker("silent", "不要播放")))
 
+    def test_silent_v1_v2_keep_sanitized_empty_compatibility_but_v3_is_strict(
+        self,
+    ) -> None:
+        sanitized_empty = "\x00\u200b\t"
+        for make_marker in (marker, marker_v2):
+            with self.subTest(version=make_marker.__name__):
+                self.assertEqual(
+                    extract_response(make_marker("silent", sanitized_empty)),
+                    ParsedResponse("silent", "", ""),
+                )
+        self.assertIsNone(
+            extract_response(marker_v3("silent", "", sanitized_empty))
+        )
+
     def test_rejects_legacy_duplicate_and_non_trailing(self) -> None:
         legacy = '<!-- codex-voice-notifier:v1 {"status":"silent","speech_text":""} -->'
         self.assertIsNone(extract_response(legacy))

@@ -122,7 +122,9 @@ def _parse_exact_payload(
 
     speech_text = _sanitize_speech_text(raw_speech)
     if status == "silent":
-        if raw_speech or raw_lead:
+        if version == "v3" and (raw_speech or raw_lead):
+            return None
+        if version != "v3" and speech_text:
             return None
         return "silent", "", ""
 
