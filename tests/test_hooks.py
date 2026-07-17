@@ -215,6 +215,53 @@ class HookTests(unittest.TestCase):
             )
             self.assertFalse((data_dir / "diagnostics.jsonl").exists())
 
+    def test_invalid_resolved_titles_use_fallback_without_diagnostic(self) -> None:
+        class HostileTitle(str):
+            def __bool__(self) -> bool:
+                raise AssertionError("hostile title must not be inspected")
+
+        cases = (
+            ("lone-surrogate", "\ud800"),
+            ("non-string", object()),
+            ("hostile-str-subclass", HostileTitle("PRIVATE_HOSTILE_TITLE")),
+        )
+        for label, resolved_title in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                data_dir = root / "data"
+                started = []
+                payload = {
+                    "session_id": f"invalid-title-{label}",
+                    "turn_id": "turn",
+                    "last_assistant_message": assistant_message_v3(
+                        "completed",
+                        "豪哥，任务：{{task_title}}已完成。",
+                        "正文。",
+                    ),
+                }
+                self.assertTrue(
+                    handle_event(
+                        payload,
+                        plugin_root=root,
+                        data_dir=data_dir,
+                        platform_name="darwin",
+                        mode_loader=lambda _: "summary",
+                        title_resolver=lambda *_: resolved_title,
+                        start_consumer=lambda plugin_root, plugin_data: started.append(
+                            (plugin_root, plugin_data)
+                        ),
+                    )
+                )
+                event = poll_next(data_dir, now=time.monotonic() + 2.0).event
+                self.assertIsNotNone(event)
+                assert event is not None
+                self.assertEqual(
+                    event.speech_text,
+                    "豪哥，任务：当前任务已完成。正文。",
+                )
+                self.assertEqual(started, [(root, data_dir)])
+                self.assertFalse((data_dir / "diagnostics.jsonl").exists())
+
     def test_silent_control_and_legacy_markers_never_resolve_title(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

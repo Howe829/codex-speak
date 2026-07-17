@@ -122,7 +122,10 @@ def handle_event(
             else plugin_root
         )
         try:
-            task_title = title_resolver(session_id, lookup_cwd)
+            resolved_title = title_resolver(session_id, lookup_cwd)
+            if type(resolved_title) is str:
+                resolved_title.encode("utf-8")
+                task_title = resolved_title
         except BaseException:
             task_title = None
     try:
