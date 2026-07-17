@@ -204,7 +204,7 @@ class PackagingTests(unittest.TestCase):
                     "source": {
                         "source": "url",
                         "url": "https://github.com/Howe829/codex-speak.git",
-                        "ref": "v0.2.6",
+                        "ref": "v0.2.7",
                     },
                     "policy": {
                         "installation": "AVAILABLE",
@@ -216,13 +216,26 @@ class PackagingTests(unittest.TestCase):
         }
         self.assertEqual(marketplace, expected)
         self.assertEqual(marketplace["plugins"][0]["name"], manifest["name"])
-        self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.6")
-        self.assertEqual(manifest["version"], "0.2.6")
+        self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.7")
+        self.assertEqual(manifest["version"], "0.2.7")
 
     def test_readme_displays_only_the_production_public_icon(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("![Codex Speak icon](assets/codex-speak-github.png)", readme)
         self.assertNotIn("artwork/concepts/", readme)
+
+    def test_manifest_uses_public_logo_and_github_homepage(self) -> None:
+        manifest = json.loads(
+            (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        github_homepage = "https://github.com/Howe829/codex-speak"
+        public_logo = "./assets/codex-speak-github.png"
+
+        self.assertEqual(manifest["homepage"], github_homepage)
+        self.assertEqual(manifest["repository"], github_homepage)
+        self.assertEqual(manifest["interface"]["websiteURL"], github_homepage)
+        self.assertEqual(manifest["interface"]["logo"], public_logo)
+        self.assertEqual(manifest["interface"]["composerIcon"], public_logo)
 
     def test_menu_uses_one_template_mark_with_alpha_prompt_cutouts(self) -> None:
         controller = (
@@ -449,7 +462,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "codex-speak")
         self.assertRegex(
             manifest["version"],
-            r"^0\.2\.6(?:\+codex\.[a-z0-9-]+)?$",
+            r"^0\.2\.7(?:\+codex\.[a-z0-9-]+)?$",
         )
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(
@@ -459,6 +472,8 @@ class PackagingTests(unittest.TestCase):
                 "version",
                 "description",
                 "author",
+                "homepage",
+                "repository",
                 "license",
                 "keywords",
                 "interface",
@@ -474,6 +489,9 @@ class PackagingTests(unittest.TestCase):
                 "category",
                 "capabilities",
                 "defaultPrompt",
+                "websiteURL",
+                "composerIcon",
+                "logo",
             },
         )
 

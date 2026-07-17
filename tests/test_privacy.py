@@ -420,8 +420,8 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         for required in (
-            r"current public Marketplace release is version 0\.2\.6",
-            r"source ref is `v0\.2\.6`",
+            r"current public Marketplace release is version 0\.2\.7",
+            r"source ref is `v0\.2\.7`",
             "runtime-hooks/stop_launcher.py",
             r"same Marketplace and plugin cache family",
             "start a new task",

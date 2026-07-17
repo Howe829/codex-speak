@@ -1,8 +1,10 @@
 {
   "name": "codex-speak",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Speaks concise Codex outcomes or complete responses on macOS.",
   "author": {"name": "Howard"},
+  "homepage": "https://github.com/Howe829/codex-speak",
+  "repository": "https://github.com/Howe829/codex-speak",
   "license": "MIT",
   "keywords": ["codex", "speech", "voice", "macos", "productivity"],
   "interface": {
@@ -12,6 +14,9 @@
     "developerName": "Howard",
     "category": "Productivity",
     "capabilities": ["Notifications"],
+    "websiteURL": "https://github.com/Howe829/codex-speak",
+    "composerIcon": "./assets/codex-speak-github.png",
+    "logo": "./assets/codex-speak-github.png",
     "defaultPrompt": ["Explain how Codex Speak works."]
   }
 }

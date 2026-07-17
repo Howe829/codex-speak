@@ -40,8 +40,8 @@ SessionStart protocol and hook paths bind to the installed version.
 
 ## Release status and Stop-hook upgrades
 
-The current public Marketplace release is version 0.2.6.
-The source ref is `v0.2.6`.
+The current public Marketplace release is version 0.2.7.
+The source ref is `v0.2.7`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -158,9 +158,10 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-Version 0.2.6 is the current Marketplace release and adds the stable Stop
-launcher for upgrade-safe task completion. Version 0.2.5 introduced the v3
-SessionStart marker for task-title leads; the parser retains v1 and v2
+Version 0.2.7 is the current Marketplace release and adds the production logo
+and GitHub homepage to the Codex plugin details page. Version 0.2.6 added the
+stable Stop launcher for upgrade-safe task completion. Version 0.2.5 introduced
+the v3 SessionStart marker for task-title leads; the parser retains v1 and v2
 compatibility.
 
 ## Test and validate
