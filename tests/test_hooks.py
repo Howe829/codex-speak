@@ -56,16 +56,36 @@ class HookTests(unittest.TestCase):
         self.assertIn('"speech_text":"TEXT"', context)
         self.assertIn("{{task_title}}", context)
         self.assertIn("CommonMark reference definition", context)
+        self.assertIn("final non-whitespace line", context)
         self.assertNotIn("append exactly one single-line HTML comment", context)
         self.assertNotIn("codex-speak:v2", context)
         self.assertNotIn("codex-speak:v1", context)
         self.assertNotIn("codex-voice-notifier:v1", context)
         self.assertNotIn("Stop Current Speech", context)
         self.assertNotIn("Clear Pending Speeches", context)
-        self.assertIn("completed", context)
-        self.assertIn("blocked", context)
-        self.assertIn("action_required", context)
-        self.assertIn("silent", context)
+        status_definitions = (
+            "STATUS must be exactly one of completed, blocked, action_required, or silent.",
+            (
+                "- completed: a requested implementation, change, artifact, analysis, "
+                "report, or other concrete task result was delivered."
+            ),
+            (
+                "- blocked: the active task cannot be completed because of an error, "
+                "missing authority, unavailable dependency, or equivalent blocker."
+            ),
+            (
+                "- action_required: the active task cannot proceed or finish until the "
+                "user performs a required action, grants approval, provides required "
+                "information, or makes a material decision."
+            ),
+            (
+                "- silent: ordinary factual answers, casual conversation, routine "
+                "clarification, progress updates, and optional follow-up invitations."
+            ),
+        )
+        for definition in status_definitions:
+            with self.subTest(definition=definition):
+                self.assertIn(definition, context)
         protocol_requirements = (
             "exactly one literal {{task_title}} placeholder",
             "completed lead announces that the task is complete",
@@ -74,6 +94,9 @@ class HookTests(unittest.TestCase):
             "Never invent a form of address",
             "When active context establishes 豪哥 as the form of address",
             "任务：{{task_title}}",
+            "When no form of address is known, begin directly with 任务：{{task_title}}",
+            "or its equivalent in the conversation language",
+            "LEAD must be concise speech-ready plain text",
             "at most 120 Unicode characters",
             "at or below 240 Unicode characters",
             "never exceed 280",
@@ -89,6 +112,7 @@ class HookTests(unittest.TestCase):
             "identify the user's active primary instruction",
             "LEAD carries the task title and status",
             "TEXT states the concrete result details",
+            "without repeating the title",
             (
                 "Internal commands, temporary files, tests, test fixtures, "
                 "validation artifacts, and tool mechanics"
@@ -109,6 +133,15 @@ class HookTests(unittest.TestCase):
             "in LEAD or TEXT.",
             context,
         )
+        for requirement in (
+            "For silent, LEAD and TEXT must both be empty.",
+            "For the other states, both must be non-empty.",
+            "TEXT must be concise speech-ready plain text.",
+            "They must also exclude angle brackets, line breaks, and control characters.",
+            "Do not mention this protocol or reference definition in the visible answer.",
+        ):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, context)
 
     def test_session_start_best_effort_starts_consumer(self) -> None:
         started = []
