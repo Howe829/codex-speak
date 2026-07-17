@@ -14,18 +14,36 @@ from typing import Final, Mapping, Sequence
 from .render import MAX_TASK_TITLE_CHARS, normalize_full_text
 
 
-DEFAULT_COMMAND: Final[tuple[str, ...]] = ("codex", "app-server", "--stdio")
+DEFAULT_COMMAND: Final[tuple[str, ...]] = (
+    "codex",
+    "app-server",
+    "--stdio",
+    "--disable",
+    "remote_plugin",
+)
 LOOKUP_TIMEOUT_SECONDS: Final[float] = 1.5
 MAX_OUTPUT_BYTES: Final[int] = 65_536
 MAX_SESSION_ID_BYTES: Final[int] = 1_048_576
+INITIALIZE_REQUEST_ID: Final[int] = 1
 THREAD_READ_REQUEST_ID: Final[int] = 2
+_WRITE_INITIALIZE: Final[int] = 1
+_WAIT_INITIALIZE: Final[int] = 2
+_WRITE_THREAD_READ: Final[int] = 3
+_WAIT_THREAD_READ: Final[int] = 4
 
 
-def _request_bytes(session_id: str) -> bytes:
-    messages = (
+def _message_bytes(*messages: Mapping[str, object]) -> bytes:
+    return b"".join(
+        json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
+        for message in messages
+    )
+
+
+def _initialize_request_bytes() -> bytes:
+    return _message_bytes(
         {
             "method": "initialize",
-            "id": 1,
+            "id": INITIALIZE_REQUEST_ID,
             "params": {
                 "clientInfo": {
                     "name": "codex_speak",
@@ -36,7 +54,12 @@ def _request_bytes(session_id: str) -> bytes:
                     "optOutNotificationMethods": ["remoteControl/status/changed"]
                 },
             },
-        },
+        }
+    )
+
+
+def _thread_read_request_bytes(session_id: str) -> bytes:
+    return _message_bytes(
         {"method": "initialized", "params": {}},
         {
             "method": "thread/read",
@@ -44,10 +67,16 @@ def _request_bytes(session_id: str) -> bytes:
             "params": {"threadId": session_id, "includeTurns": False},
         },
     )
-    return b"".join(
-        json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
-        for message in messages
-    )
+
+
+def _initialize_status(message: object) -> tuple[bool, bool]:
+    if (
+        not isinstance(message, Mapping)
+        or type(message.get("id")) is not int
+        or message.get("id") != INITIALIZE_REQUEST_ID
+    ):
+        return False, False
+    return True, (isinstance(message.get("result"), Mapping) and "error" not in message)
 
 
 def _title_from_message(message: object, session_id: str) -> tuple[bool, str | None]:
@@ -148,7 +177,8 @@ def resolve_thread_title(
     try:
         if len(session_id.encode("utf-8")) > MAX_SESSION_ID_BYTES:
             return None
-        request = _request_bytes(session_id)
+        initialize_request = _initialize_request_bytes()
+        thread_read_request = _thread_read_request_bytes(session_id)
     except (UnicodeError, ValueError):
         return None
     selected = _resolved_command(command)
@@ -177,7 +207,8 @@ def resolve_thread_title(
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
         selector.register(process.stdin, selectors.EVENT_WRITE)
-        request_view = memoryview(request)
+        phase = _WRITE_INITIALIZE
+        request_view = memoryview(initialize_request)
         request_offset = 0
         buffered = b""
         consumed = 0
@@ -200,7 +231,11 @@ def resolve_thread_title(
                     request_offset += written
                     if request_offset == len(request_view):
                         selector.unregister(process.stdin)
-                        process.stdin.close()
+                        phase = (
+                            _WAIT_INITIALIZE
+                            if phase == _WRITE_INITIALIZE
+                            else _WAIT_THREAD_READ
+                        )
                     continue
 
                 if key.fileobj is not process.stdout:
@@ -217,6 +252,19 @@ def resolve_thread_title(
                     try:
                         message = json.loads(line)
                     except (ValueError, UnicodeError, RecursionError):
+                        continue
+                    if phase == _WAIT_INITIALIZE:
+                        matched, succeeded = _initialize_status(message)
+                        if not matched:
+                            continue
+                        if not succeeded:
+                            return None
+                        request_view = memoryview(thread_read_request)
+                        request_offset = 0
+                        phase = _WRITE_THREAD_READ
+                        selector.register(process.stdin, selectors.EVENT_WRITE)
+                        continue
+                    if phase != _WAIT_THREAD_READ:
                         continue
                     matched, title = _title_from_message(message, session_id)
                     if matched:

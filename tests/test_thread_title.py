@@ -20,16 +20,35 @@ class ThreadTitleTests(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
         return (sys.executable, str(path))
 
+    def _staged_server(self, root: Path, body: str) -> tuple[str, ...]:
+        return self._server(
+            root,
+            f"""
+import json, select, sys
+initialize = json.loads(sys.stdin.readline())
+assert initialize["id"] == 1
+assert initialize["method"] == "initialize"
+if select.select([sys.stdin], [], [], 0.02)[0]:
+    raise RuntimeError("follow-up arrived before initialize response")
+print(json.dumps({{"id": 1, "result": {{"codexHome": "/tmp"}}}}), flush=True)
+initialized = json.loads(sys.stdin.readline())
+thread_read = json.loads(sys.stdin.readline())
+assert initialized == {{"method": "initialized", "params": {{}}}}
+assert thread_read["id"] == 2
+assert thread_read["method"] == "thread/read"
+if select.select([sys.stdin], [], [], 0.02)[0]:
+    raise RuntimeError("stdin closed before thread response")
+thread_id = thread_read["params"]["threadId"]
+{body}
+""".strip(),
+        )
+
     def test_reads_matching_name_after_unrelated_notification(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = self._server(
+            command = self._staged_server(
                 root,
                 """
-import json, sys
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
-print(json.dumps({"id": 1, "result": {"codexHome": "/tmp"}}), flush=True)
 print(json.dumps({"method": "remoteControl/status/changed", "params": {}}), flush=True)
 print(json.dumps({"id": 2, "result": {"thread": {
     "id": thread_id,
@@ -48,12 +67,9 @@ print(json.dumps({"id": 2, "result": {"thread": {
     def test_falls_back_to_preview_and_sanitizes_title(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = self._server(
+            command = self._staged_server(
                 root,
                 """
-import json, sys
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
 print(json.dumps({"id": 2, "result": {"thread": {
     "id": thread_id,
     "name": None,
@@ -81,9 +97,9 @@ print(json.dumps({"id": 2, "result": {"thread": {
                 script=script
             ), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                command = self._server(
+                command = self._staged_server(
                     root,
-                    "import sys\n[sys.stdin.readline() for _ in range(3)]\n" + script,
+                    script,
                 )
                 self.assertIsNone(
                     resolve_thread_title(
@@ -91,7 +107,7 @@ print(json.dumps({"id": 2, "result": {"thread": {
                     )
                 )
 
-    def test_timeout_reaps_child_and_returns_none(self) -> None:
+    def test_timeout_during_initialize_reaps_child(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             pid_path = root / "pid"
@@ -100,7 +116,7 @@ print(json.dumps({"id": 2, "result": {"thread": {
                 f"""
 import os, pathlib, sys, time
 pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
-[sys.stdin.readline() for _ in range(3)]
+sys.stdin.readline()
 time.sleep(5)
 """.strip(),
             )
@@ -129,12 +145,9 @@ time.sleep(5)
     def test_rejects_non_integer_response_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = self._server(
+            command = self._staged_server(
                 root,
                 """
-import json, sys
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
 print(json.dumps({"id": 2.0, "result": {"thread": {
     "id": thread_id,
     "name": "wrong"
@@ -203,12 +216,9 @@ print(json.dumps({"id": 2.0, "result": {"thread": {
     def test_closes_process_pipes_without_resource_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = self._server(
+            command = self._staged_server(
                 root,
                 """
-import json, sys
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
 print(json.dumps({"id": 2, "result": {"thread": {
     "id": thread_id,
     "name": "closed pipes"
@@ -227,21 +237,18 @@ print(json.dumps({"id": 2, "result": {"thread": {
                 [warning for warning in caught if warning.category is ResourceWarning]
             )
 
-    def test_closes_stdin_and_reaps_child_after_success(self) -> None:
+    def test_keeps_stdin_open_and_reaps_child_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             pid_path = root / "pid"
-            command = self._server(
+            command = self._staged_server(
                 root,
                 f"""
-import json, os, pathlib, sys, time
+import os, pathlib, time
 pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-stdin_closed = sys.stdin.readline() == ""
-thread_id = messages[2]["params"]["threadId"]
 print(json.dumps({{"id": 2, "result": {{"thread": {{
     "id": thread_id,
-    "name": "stdin closed" if stdin_closed else "stdin open"
+    "name": "stdin open"
 }}}}}}), flush=True)
 time.sleep(5)
 """.strip(),
@@ -250,7 +257,7 @@ time.sleep(5)
                 resolve_thread_title(
                     "thread-8b", root, command=command, timeout_seconds=1.0
                 ),
-                "stdin closed",
+                "stdin open",
             )
             pid = int(pid_path.read_text(encoding="utf-8"))
             with self.assertRaises(ProcessLookupError):
@@ -259,12 +266,9 @@ time.sleep(5)
     def test_discards_app_server_stderr(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            command = self._server(
+            command = self._staged_server(
                 root,
                 """
-import json, sys
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
 print("/Users/private/raw-app-server-error", file=sys.stderr, flush=True)
 print(json.dumps({"id": 2, "result": {"thread": {
     "id": thread_id,
@@ -293,7 +297,7 @@ print(json.dumps({"id": 2, "result": {"thread": {
 import os, pathlib, signal, sys, time
 signal.signal(signal.SIGTERM, lambda *_: None)
 pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
-[sys.stdin.readline() for _ in range(3)]
+sys.stdin.readline()
 time.sleep(5)
 """.strip(),
             )
@@ -315,8 +319,10 @@ time.sleep(5)
             command = self._server(
                 root,
                 f"""
-import os, pathlib, time
+import json, os, pathlib, sys, time
 pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
+json.loads(sys.stdin.readline())
+print(json.dumps({{"id": 1, "result": {{"codexHome": "/tmp"}}}}), flush=True)
 time.sleep(1)
 """.strip(),
             )
@@ -339,12 +345,10 @@ time.sleep(1)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             descendant_pid_path = root / "descendant-pid"
-            command = self._server(
+            command = self._staged_server(
                 root,
                 f"""
-import json, os, pathlib, subprocess, sys, time
-messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
-thread_id = messages[2]["params"]["threadId"]
+import os, pathlib, subprocess, time
 descendant_code = (
     "import os, pathlib, time;"
     "pathlib.Path({str(descendant_pid_path)!r}).write_text(str(os.getpid()));"
@@ -400,7 +404,7 @@ os._exit(0)
                 root,
                 """
 import sys, time
-[sys.stdin.readline() for _ in range(3)]
+sys.stdin.readline()
 time.sleep(5)
 """.strip(),
             )
@@ -433,6 +437,105 @@ time.sleep(5)
         self.assertIsNotNone(command)
         assert command is not None
         self.assertTrue(Path(command[0]).is_absolute())
+        self.assertEqual(
+            command[1:],
+            ("app-server", "--stdio", "--disable", "remote_plugin"),
+        )
+
+    def test_stages_initialize_and_keeps_stdin_open_for_thread_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = self._server(
+                root,
+                """
+import json, select, sys
+initialize = json.loads(sys.stdin.readline())
+assert initialize["id"] == 1
+assert initialize["method"] == "initialize"
+if select.select([sys.stdin], [], [], 0.05)[0]:
+    raise RuntimeError("follow-up arrived before initialize response")
+print(json.dumps({"method": "remoteControl/status/changed", "params": {}}), flush=True)
+print(json.dumps({"id": 1, "result": {"codexHome": "/tmp"}}), flush=True)
+initialized = json.loads(sys.stdin.readline())
+thread_read = json.loads(sys.stdin.readline())
+assert initialized == {"method": "initialized", "params": {}}
+assert thread_read["id"] == 2
+assert thread_read["method"] == "thread/read"
+if select.select([sys.stdin], [], [], 0.05)[0]:
+    raise RuntimeError("stdin closed before thread response")
+thread_id = thread_read["params"]["threadId"]
+print(json.dumps({"id": 2, "result": {"thread": {
+    "id": thread_id,
+    "name": "strict staged title"
+}}}), flush=True)
+""".strip(),
+            )
+            self.assertEqual(
+                resolve_thread_title(
+                    "thread-13", root, command=command, timeout_seconds=1.0
+                ),
+                "strict staged title",
+            )
+
+    def test_invalid_initialize_response_sends_no_follow_up(self) -> None:
+        responses = (
+            '{"id":1,"error":{"message":"failed"}}',
+            '{"id":1,"result":{},"error":{"message":"failed"}}',
+            '{"id":1,"result":[]}',
+            '{"id":1.0,"result":{}}',
+        )
+        for response in responses:
+            with self.subTest(
+                response=response
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                follow_up_path = root / "follow-up"
+                command = self._server(
+                    root,
+                    f"""
+import pathlib, select, sys, time
+sys.stdin.readline()
+print({response!r}, flush=True)
+if select.select([sys.stdin], [], [], 0.2)[0]:
+    follow_up = sys.stdin.readline()
+    if follow_up:
+        pathlib.Path({str(follow_up_path)!r}).write_text(follow_up)
+time.sleep(0.2)
+""".strip(),
+                )
+                self.assertIsNone(
+                    resolve_thread_title(
+                        "thread-14", root, command=command, timeout_seconds=0.5
+                    )
+                )
+                self.assertFalse(follow_up_path.exists())
+
+    def test_timeout_during_thread_read_reaps_child(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pid_path = root / "phase-two-pid"
+            command = self._server(
+                root,
+                f"""
+import json, os, pathlib, sys, time
+initialize = json.loads(sys.stdin.readline())
+print(json.dumps({{"id": 1, "result": {{"codexHome": "/tmp"}}}}), flush=True)
+json.loads(sys.stdin.readline())
+json.loads(sys.stdin.readline())
+pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
+time.sleep(5)
+""".strip(),
+            )
+            started = time.monotonic()
+            self.assertIsNone(
+                resolve_thread_title(
+                    "thread-15", root, command=command, timeout_seconds=0.2
+                )
+            )
+            self.assertLess(time.monotonic() - started, 0.4)
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
 
 
 if __name__ == "__main__":
