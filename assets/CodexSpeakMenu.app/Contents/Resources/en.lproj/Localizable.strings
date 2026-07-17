@@ -1,0 +1,12 @@
+"menu.mode.silent" = "Silent";
+"menu.mode.summary" = "Summary";
+"menu.mode.full" = "Full";
+"menu.action.stop" = "Stop Current Speech";
+"menu.action.clear" = "Clear Pending Speeches";
+"menu.action.quit" = "Quit Codex Speak";
+"error.bridge_stopped" = "Speech bridge stopped";
+"error.clear_failed" = "Could not clear pending speeches";
+"error.mode_write_failed" = "Could not change speech mode";
+"error.mode_read_failed" = "Could not read speech mode";
+"error.heartbeat_unavailable" = "Heartbeat unavailable";
+"error.playback_record_failed" = "Could not record playback result";

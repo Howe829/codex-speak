@@ -651,6 +651,26 @@ class PackagingTests(unittest.TestCase):
             (APP / "Contents" / "Resources" / "AppIcon.icns").is_file()
         )
 
+    def test_embedded_helper_contains_exact_menu_localizations(self) -> None:
+        for language in ("en", "zh-Hans"):
+            source = (
+                ROOT
+                / "menu-bar"
+                / "Resources"
+                / f"{language}.lproj"
+                / "Localizable.strings"
+            )
+            packaged = (
+                APP
+                / "Contents"
+                / "Resources"
+                / f"{language}.lproj"
+                / "Localizable.strings"
+            )
+            with self.subTest(language=language):
+                self.assertTrue(packaged.is_file(), packaged)
+                self.assertEqual(packaged.read_bytes(), source.read_bytes())
+
     def test_embedded_helper_is_exactly_universal_and_ad_hoc_signed(self) -> None:
         architectures = subprocess.run(
             ["lipo", "-archs", str(EXECUTABLE)],
@@ -735,6 +755,19 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('mkdir -p "$STAGED_APP/Contents/Resources"', script)
         self.assertIn(
             'cp "$PACKAGE/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"',
+            script,
+        )
+        self.assertIn("for localization in en zh-Hans; do", script)
+        self.assertIn(
+            'source="$PACKAGE/Resources/$localization.lproj/Localizable.strings"',
+            script,
+        )
+        self.assertIn(
+            'destination="$STAGED_APP/Contents/Resources/$localization.lproj"',
+            script,
+        )
+        self.assertIn(
+            'cp "$source" "$destination/Localizable.strings"',
             script,
         )
         for download_command in ("curl ", "wget ", "git clone", "pip install"):

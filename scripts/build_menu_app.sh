@@ -34,6 +34,12 @@ mkdir -p "$STAGED_APP/Contents/MacOS"
 cp "$PACKAGE/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
 mkdir -p "$STAGED_APP/Contents/Resources"
 cp "$PACKAGE/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
+for localization in en zh-Hans; do
+    source="$PACKAGE/Resources/$localization.lproj/Localizable.strings"
+    destination="$STAGED_APP/Contents/Resources/$localization.lproj"
+    mkdir -p "$destination"
+    cp "$source" "$destination/Localizable.strings"
+done
 lipo -create "$ARM64_BINARY" "$X86_64_BINARY" \
     -output "$STAGED_APP/Contents/MacOS/CodexSpeakMenu"
 chmod 755 "$STAGED_APP/Contents/MacOS/CodexSpeakMenu"
