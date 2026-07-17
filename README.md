@@ -135,7 +135,7 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-This repository's source candidate is version 0.2.5.
+This repository's current release is version 0.2.5.
 
 Version 0.2.5 introduces the v3 SessionStart marker for task-title leads. The
 parser retains v1 and v2 compatibility, but existing tasks keep their original

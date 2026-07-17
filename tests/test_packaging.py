@@ -109,7 +109,7 @@ class PackagingTests(unittest.TestCase):
                     "source": {
                         "source": "url",
                         "url": "https://github.com/Howe829/codex-speak.git",
-                        "ref": "v0.2.4",
+                        "ref": "v0.2.5",
                     },
                     "policy": {
                         "installation": "AVAILABLE",
