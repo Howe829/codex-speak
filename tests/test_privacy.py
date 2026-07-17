@@ -420,8 +420,8 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         for required in (
-            r"source candidate is version 0\.2\.6",
-            r"Marketplace\s+release remains version 0\.2\.5",
+            r"current public Marketplace release is version 0\.2\.6",
+            r"source ref is `v0\.2\.6`",
             "runtime-hooks/stop_launcher.py",
             r"same Marketplace and plugin cache family",
             "start a new task",
@@ -432,6 +432,8 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertRegex(readme, required)
+        self.assertNotIn("source candidate", readme)
+        self.assertNotIn("release remains version 0.2.5", readme)
 
 
 if __name__ == "__main__":

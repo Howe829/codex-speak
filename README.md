@@ -38,12 +38,10 @@ commands, and trust the current definitions. Codex asks again when a hook
 definition changes. Start a new task after installation or reinstall so the
 SessionStart protocol and hook paths bind to the installed version.
 
-## Candidate status and Stop-hook upgrades
+## Release status and Stop-hook upgrades
 
-This repository's source candidate is version 0.2.6. The public Marketplace
-release remains version 0.2.5, including its `v0.2.5` ref, until 0.2.6 is
-separately published; this document does not mean that 0.2.6 is already
-published or installed.
+The current public Marketplace release is version 0.2.6.
+The source ref is `v0.2.6`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -160,9 +158,10 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-The Marketplace release remains version 0.2.5 while this repository prepares
-the 0.2.6 source candidate. Version 0.2.5 introduced the v3 SessionStart
-marker for task-title leads; the parser retains v1 and v2 compatibility.
+Version 0.2.6 is the current Marketplace release and adds the stable Stop
+launcher for upgrade-safe task completion. Version 0.2.5 introduced the v3
+SessionStart marker for task-title leads; the parser retains v1 and v2
+compatibility.
 
 ## Test and validate
 
