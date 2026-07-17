@@ -50,10 +50,14 @@ class HookTests(unittest.TestCase):
         specific = output["hookSpecificOutput"]
         self.assertEqual(specific["hookEventName"], "SessionStart")
         context = specific["additionalContext"]
-        self.assertIn("[codex-speak-v2]", context)
-        self.assertIn("codex-speak:v2#", context)
+        self.assertIn("[codex-speak-v3]", context)
+        self.assertIn("codex-speak:v3#", context)
+        self.assertIn('"speech_lead":"LEAD"', context)
+        self.assertIn('"speech_text":"TEXT"', context)
+        self.assertIn("{{task_title}}", context)
         self.assertIn("CommonMark reference definition", context)
         self.assertNotIn("append exactly one single-line HTML comment", context)
+        self.assertNotIn("codex-speak:v2", context)
         self.assertNotIn("codex-speak:v1", context)
         self.assertNotIn("codex-voice-notifier:v1", context)
         self.assertNotIn("Stop Current Speech", context)
@@ -63,20 +67,28 @@ class HookTests(unittest.TestCase):
         self.assertIn("action_required", context)
         self.assertIn("silent", context)
         protocol_requirements = (
+            "exactly one literal {{task_title}} placeholder",
+            "completed lead announces that the task is complete",
+            "blocked lead announces that the task is blocked",
+            "action_required lead announces that the task needs the user's action",
+            "Never invent a form of address",
+            "When active context establishes 豪哥 as the form of address",
+            "任务：{{task_title}}",
+            "at most 120 Unicode characters",
             "at or below 240 Unicode characters",
             "never exceed 280",
             (
                 "Follow active AGENTS.md, memory, and conversation preferences "
-                "for language, salutation, and tone"
+                "for LEAD language, salutation, and tone"
             ),
-            "use neutral wording when no salutation is known",
         )
         for requirement in protocol_requirements:
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, context)
         instruction_link_requirements = (
             "identify the user's active primary instruction",
-            "directly reflect that instruction",
+            "LEAD carries the task title and status",
+            "TEXT states the concrete result details",
             (
                 "Internal commands, temporary files, tests, test fixtures, "
                 "validation artifacts, and tool mechanics"
@@ -92,9 +104,9 @@ class HookTests(unittest.TestCase):
         for requirement in instruction_link_requirements:
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, context)
-        self.assertNotIn("豪哥", context)
         self.assertIn(
-            "Do not include Markdown, code, URLs, file paths, raw errors, or secrets.",
+            "Do not include Markdown, code, URLs, file paths, raw errors, or secrets "
+            "in LEAD or TEXT.",
             context,
         )
 
