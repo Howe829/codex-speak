@@ -73,6 +73,8 @@ changes made by another trusted local control are reflected before selection.
 
 ## Menu controls
 
+The menu bar follows your macOS preferred language and supports English and Simplified Chinese.
+
 The helper has exactly six menu actions:
 
 1. `Silent`

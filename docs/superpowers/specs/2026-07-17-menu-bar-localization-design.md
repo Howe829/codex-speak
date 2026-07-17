@@ -1,7 +1,7 @@
 # Codex Speak Menu Bar Localization Design
 
 Date: 2026-07-17
-Status: Confirmed in conversation; awaiting written-spec review
+Status: Implemented
 
 ## Goal
 

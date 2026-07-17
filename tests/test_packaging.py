@@ -699,6 +699,11 @@ class PackagingTests(unittest.TestCase):
 
     def test_readme_locks_exact_menu_order_and_public_installation(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "The menu bar follows your macOS preferred language and supports "
+            "English and Simplified Chinese.",
+            readme,
+        )
         exact_menu = """1. `Silent`
 2. `Summary`
 3. `Full`
