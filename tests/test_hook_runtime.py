@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import codex_speak.hook_runtime as hook_runtime
 from codex_speak.hook_runtime import (
     RUNTIME_HOOK_DIRECTORY,
     STOP_LAUNCHER_NAME,
@@ -56,6 +57,29 @@ class HookRuntimeTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"launcher-v1\n")
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
+    def test_rejects_empty_or_oversized_source_without_target_temporary_or_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            data_dir = base / "data"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            for payload in (b"", b"x" * 65_537):
+                with self.subTest(size=len(payload)):
+                    plugin_root = make_plugin(base / str(len(payload)), payload)
+                    with patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+                        self.assertFalse(install_stop_launcher(plugin_root, data_dir))
+                    runtime_dir = data_dir / RUNTIME_HOOK_DIRECTORY
+                    self.assertFalse((runtime_dir / STOP_LAUNCHER_NAME).exists())
+                    self.assertFalse(
+                        runtime_dir.exists()
+                        and any(
+                            path.name.startswith(f".{STOP_LAUNCHER_NAME}.")
+                            for path in runtime_dir.iterdir()
+                        )
+                    )
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue(), "")
+
     def test_failed_replace_preserves_target_and_removes_temporary_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -81,6 +105,30 @@ class HookRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(stderr.getvalue(), "")
+
+    def test_failed_temporary_permission_normalization_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            plugin_root = make_plugin(base, b"launcher\n")
+            data_dir = base / "data"
+            original_fchmod = os.fchmod
+
+            def fail_file_permissions(descriptor: int, mode: int) -> None:
+                if stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise OSError
+                original_fchmod(descriptor, mode)
+
+            with patch(
+                "codex_speak.hook_runtime.os.fchmod",
+                side_effect=fail_file_permissions,
+            ):
+                self.assertFalse(install_stop_launcher(plugin_root, data_dir))
+
+            runtime_dir = data_dir / RUNTIME_HOOK_DIRECTORY
+            self.assertFalse((runtime_dir / STOP_LAUNCHER_NAME).exists())
+            self.assertFalse(
+                any(path.name.startswith(f".{STOP_LAUNCHER_NAME}.") for path in runtime_dir.iterdir())
+            )
 
     def test_concurrent_installations_leave_one_private_byte_exact_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -163,3 +211,93 @@ class HookRuntimeTests(unittest.TestCase):
             self.assertFalse((data_dir / RUNTIME_HOOK_DIRECTORY / STOP_LAUNCHER_NAME).exists())
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(stderr.getvalue(), "")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_source_replacement_race_cannot_persist_linked_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            packaged = b"packaged-launcher\n"
+            outside_payload = b"outside-launcher\n"
+            plugin_root = make_plugin(base, packaged)
+            source = plugin_root / "hooks" / STOP_LAUNCHER_NAME
+            outside = base / "outside-launcher.py"
+            outside.write_bytes(outside_payload)
+            data_dir = base / "data"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            original_reader = hook_runtime._read_packaged_launcher
+
+            def replace_source_then_read(path: Path) -> bytes:
+                path.unlink()
+                path.symlink_to(outside)
+                return original_reader(path)
+
+            with (
+                patch(
+                    "codex_speak.hook_runtime._read_packaged_launcher",
+                    side_effect=replace_source_then_read,
+                ),
+                patch("sys.stdout", stdout),
+                patch("sys.stderr", stderr),
+            ):
+                self.assertFalse(install_stop_launcher(plugin_root, data_dir))
+
+            runtime_dir = data_dir / RUNTIME_HOOK_DIRECTORY
+            self.assertFalse((runtime_dir / STOP_LAUNCHER_NAME).exists())
+            self.assertFalse(
+                runtime_dir.exists()
+                and any(path.name.startswith(f".{STOP_LAUNCHER_NAME}.") for path in runtime_dir.iterdir())
+            )
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue(), "")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_runtime_directory_replacement_race_cannot_escape_directory_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            payload = b"packaged-launcher\n"
+            plugin_root = make_plugin(base, payload)
+            data_dir = base / "data"
+            runtime_dir = data_dir / RUNTIME_HOOK_DIRECTORY
+            outside = base / "outside"
+            outside.mkdir()
+            moved_runtime_dir = base / "runtime-directory-after-swap"
+            original_path_chmod = Path.chmod
+            original_fchmod = os.fchmod
+            swapped = False
+
+            def swap_runtime_directory() -> None:
+                nonlocal swapped
+                if not swapped:
+                    runtime_dir.rename(moved_runtime_dir)
+                    runtime_dir.symlink_to(outside, target_is_directory=True)
+                    swapped = True
+
+            def replace_path_chmod(
+                path: Path, mode: int, *, follow_symlinks: bool = True
+            ) -> None:
+                original_path_chmod(path, mode, follow_symlinks=follow_symlinks)
+                if path == runtime_dir:
+                    swap_runtime_directory()
+
+            def replace_directory_after_fchmod(descriptor: int, mode: int) -> None:
+                original_fchmod(descriptor, mode)
+                if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                    swap_runtime_directory()
+
+            with (
+                patch("pathlib.Path.chmod", side_effect=replace_path_chmod),
+                patch(
+                    "codex_speak.hook_runtime.os.fchmod",
+                    side_effect=replace_directory_after_fchmod,
+                ),
+            ):
+                self.assertTrue(install_stop_launcher(plugin_root, data_dir))
+
+            target = moved_runtime_dir / STOP_LAUNCHER_NAME
+            self.assertTrue(swapped)
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(moved_runtime_dir.stat().st_mode), 0o700)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o755)
