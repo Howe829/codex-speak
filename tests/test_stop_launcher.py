@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -155,3 +156,21 @@ class StopLauncherTests(unittest.TestCase):
                 self.assertEqual(main(), 0)
             self.assertEqual(stdout.getvalue(), "{}\n")
             self.assertEqual(stderr.getvalue(), "")
+
+    def test_direct_script_execution_emits_empty_result_for_missing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "howe829" / "codex-speak" / "0.2.5"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(Path(__file__).resolve().parent.parent / "hooks" / "stop_launcher.py"),
+                ],
+                capture_output=True,
+                check=False,
+                env={"PLUGIN_ROOT": str(missing)},
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "{}\n")
+            self.assertEqual(result.stderr, "")

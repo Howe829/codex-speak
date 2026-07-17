@@ -132,3 +132,7 @@ def main() -> int:
     except BaseException:
         return _write_empty_result()
     return _write_empty_result()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
