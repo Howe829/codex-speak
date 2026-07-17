@@ -18,6 +18,45 @@ def summary_payload(status: str, text: str) -> SpeechPayload:
 
 
 class PrivacyAndPackagingTests(unittest.TestCase):
+    def test_task_title_and_app_server_failure_never_enter_diagnostics(self) -> None:
+        title_secret = "PRIVATE_TASK_TITLE_48291"
+        server_secret = "PRIVATE_APP_SERVER_ERROR_59317"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_dir = root / "data"
+            payload_value = json.dumps(
+                {
+                    "status": "completed",
+                    "speech_lead": "任务：{{task_title}}已完成。",
+                    "speech_text": "正文。",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            handle_event(
+                {
+                    "session_id": "PRIVATE_RAW_SESSION_60429",
+                    "turn_id": "turn",
+                    "last_assistant_message": (
+                        "正文\n[codex-speak-v3]: <codex-speak:v3#"
+                        + payload_value
+                        + ">"
+                    ),
+                },
+                plugin_root=root,
+                data_dir=data_dir,
+                platform_name="darwin",
+                mode_loader=lambda _: "summary",
+                title_resolver=lambda *_: title_secret,
+                start_consumer=lambda *_: (_ for _ in ()).throw(
+                    OSError(server_secret)
+                ),
+            )
+            diagnostics = (data_dir / "diagnostics.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn(title_secret, diagnostics)
+            self.assertNotIn(server_secret, diagnostics)
+            self.assertNotIn("PRIVATE_RAW_SESSION_60429", diagnostics)
+
     def test_full_mode_bridge_claims_then_drains_private_runtime(self) -> None:
         canaries = {
             "prompt": "BRIDGE_PROMPT_CANARY_10457",

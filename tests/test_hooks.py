@@ -20,6 +20,21 @@ def assistant_message(status: str, speech_text: str) -> str:
     return f"Visible final answer\n\n<!-- codex-speak:v1 {payload} -->"
 
 
+def assistant_message_v3(
+    status: str, speech_lead: str, speech_text: str, *, body: str = "Visible final answer"
+) -> str:
+    payload = json.dumps(
+        {
+            "status": status,
+            "speech_lead": speech_lead,
+            "speech_text": speech_text,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"{body}\n\n[codex-speak-v3]: <codex-speak:v3#{payload}>"
+
+
 def read_diagnostics(data_dir: Path) -> list[dict[str, object]]:
     return [
         json.loads(line)
@@ -120,6 +135,117 @@ class HookTests(unittest.TestCase):
             result = poll_next(data_dir, now=time.monotonic() + 2.0)
             self.assertEqual(result.event.speech_text if result.event else None, "任务完成")
 
+    def test_v3_stop_resolves_real_title_for_summary_and_full(self) -> None:
+        cases = (
+            ("summary", "摘要正文。"),
+            ("full", "完整正文。"),
+        )
+        for mode, expected_body in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                data_dir = root / "data"
+                started = []
+                title_calls = []
+                payload = {
+                    "session_id": "real-session",
+                    "turn_id": f"{mode}-turn",
+                    "cwd": str(root),
+                    "last_assistant_message": assistant_message_v3(
+                        "completed",
+                        "豪哥，任务：{{task_title}}已完成。",
+                        "摘要正文。",
+                        body="完整正文。",
+                    ),
+                }
+                self.assertTrue(
+                    handle_event(
+                        payload,
+                        plugin_root=root,
+                        data_dir=data_dir,
+                        platform_name="darwin",
+                        mode_loader=lambda _: mode,
+                        title_resolver=lambda session, cwd: (
+                            title_calls.append((session, cwd)) or "真实侧栏标题"
+                        ),
+                        start_consumer=lambda plugin_root, plugin_data: started.append(
+                            (plugin_root, plugin_data)
+                        ),
+                    )
+                )
+                event = poll_next(data_dir, now=time.monotonic() + 2.0).event
+                self.assertIsNotNone(event)
+                assert event is not None
+                self.assertEqual(
+                    event.speech_text,
+                    f"豪哥，任务：真实侧栏标题已完成。{expected_body}",
+                )
+                self.assertEqual(title_calls, [("real-session", root)])
+                self.assertEqual(started, [(root, data_dir)])
+
+    def test_title_lookup_failure_uses_fallback_without_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_dir = root / "data"
+            payload = {
+                "session_id": "fallback-session",
+                "turn_id": "fallback-turn",
+                "last_assistant_message": assistant_message_v3(
+                    "blocked",
+                    "豪哥，任务：{{task_title}}遇到阻塞。",
+                    "需要处理。",
+                ),
+            }
+            self.assertTrue(
+                handle_event(
+                    payload,
+                    plugin_root=root,
+                    data_dir=data_dir,
+                    platform_name="darwin",
+                    mode_loader=lambda _: "summary",
+                    title_resolver=lambda *_: (_ for _ in ()).throw(OSError("private")),
+                    start_consumer=lambda *_: None,
+                )
+            )
+            event = poll_next(data_dir, now=time.monotonic() + 2.0).event
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertEqual(
+                event.speech_text,
+                "豪哥，任务：当前任务遇到阻塞。需要处理。",
+            )
+            self.assertFalse((data_dir / "diagnostics.jsonl").exists())
+
+    def test_silent_control_and_legacy_markers_never_resolve_title(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            arguments = {
+                "plugin_root": root,
+                "data_dir": root / "data",
+                "platform_name": "darwin",
+                "start_consumer": lambda *_: None,
+                "title_resolver": lambda *_: self.fail("title lookup must not run"),
+            }
+            v3_payload = {
+                "session_id": "silent-session",
+                "turn_id": "silent-turn",
+                "last_assistant_message": assistant_message_v3(
+                    "completed",
+                    "任务：{{task_title}}已完成。",
+                    "正文。",
+                ),
+            }
+            self.assertFalse(
+                handle_event(v3_payload, mode_loader=lambda _: "silent", **arguments)
+            )
+            legacy_payload = {
+                "session_id": "legacy-session",
+                "turn_id": "legacy-turn",
+                "last_assistant_message": assistant_message("completed", "旧正文。"),
+            }
+            self.assertTrue(
+                handle_event(legacy_payload, mode_loader=lambda _: "summary", **arguments)
+            )
+
     def test_silent_control_mode_does_not_render_enqueue_or_start_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
@@ -131,6 +257,7 @@ class HookTests(unittest.TestCase):
                 ),
             }
             with (
+                patch("hooks.stop.extract_response") as parser,
                 patch("hooks.stop.render_speech") as renderer,
                 patch("hooks.stop.enqueue") as enqueue_event,
             ):
@@ -143,6 +270,7 @@ class HookTests(unittest.TestCase):
                     start_consumer=lambda *_: self.fail("consumer must not start"),
                 )
             self.assertFalse(result)
+            parser.assert_not_called()
             renderer.assert_not_called()
             enqueue_event.assert_not_called()
             self.assertFalse((data_dir / "spool").exists())

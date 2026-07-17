@@ -17,10 +17,12 @@ from codex_speak.protocol import extract_response
 from codex_speak.queue import discard_event, enqueue, make_event_id, try_worker_lock
 from codex_speak.render import render_speech
 from codex_speak.settings import load_mode
+from codex_speak.thread_title import resolve_thread_title
 
 
 ModeLoader = Callable[[Path], str]
 ConsumerStarter = Callable[[Path, Path], object]
+TitleResolver = Callable[[str, Path], str | None]
 INVALID_EVENT_ID = make_event_id("invalid-session-id", "invalid-turn-id")
 
 
@@ -42,6 +44,7 @@ def handle_event(
     platform_name: str,
     mode_loader: ModeLoader,
     start_consumer: ConsumerStarter,
+    title_resolver: TitleResolver = resolve_thread_title,
 ) -> bool:
     session_id = payload.get("session_id")
     turn_id = payload.get("turn_id")
@@ -70,6 +73,32 @@ def handle_event(
         )
         return False
 
+    try:
+        mode = mode_loader(data_dir)
+    except (OSError, TypeError, ValueError):
+        parsed = extract_response(message if isinstance(message, str) else None)
+        if parsed is None:
+            record(
+                data_dir,
+                event_id=safe_event_id,
+                status="unknown",
+                result="discarded",
+                mode="unknown",
+                error_code="invalid_marker",
+            )
+            return False
+        record(
+            data_dir,
+            event_id=safe_event_id,
+            status=parsed.status,
+            result="failed",
+            mode="unknown",
+            error_code="invalid_settings",
+        )
+        return False
+    if mode == "silent":
+        return False
+
     parsed = extract_response(message if isinstance(message, str) else None)
     if parsed is None:
         record(
@@ -82,22 +111,22 @@ def handle_event(
         )
         return False
 
-    try:
-        mode = mode_loader(data_dir)
-    except (OSError, TypeError, ValueError):
-        record(
-            data_dir,
-            event_id=safe_event_id,
-            status=parsed.status,
-            result="failed",
-            mode="unknown",
-            error_code="invalid_settings",
+    task_title: str | None = None
+    if parsed.speech_lead_template:
+        cwd_value = payload.get("cwd")
+        lookup_cwd = (
+            Path(cwd_value)
+            if isinstance(cwd_value, str)
+            and bool(cwd_value.strip())
+            and Path(cwd_value).is_absolute()
+            else plugin_root
         )
-        return False
-    if mode == "silent":
-        return False
+        try:
+            task_title = title_resolver(session_id, lookup_cwd)
+        except BaseException:
+            task_title = None
     try:
-        speech = render_speech(parsed, mode)
+        speech = render_speech(parsed, mode, task_title=task_title)
     except (TypeError, ValueError):
         record(
             data_dir,
