@@ -40,8 +40,8 @@ SessionStart protocol and hook paths bind to the installed version.
 
 ## Release status and Stop-hook upgrades
 
-The current public Marketplace release is version 0.2.7.
-The source ref is `v0.2.7`.
+The current public Marketplace release is version 0.2.8.
+The source ref is `v0.2.8`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -80,7 +80,11 @@ The menu bar checkmark selects one speech mode:
   URLs, and local paths are replaced with speech-safe descriptions. Double-
   quote delimiters are removed so macOS speaks their enclosed text, and short
   prose labels in single backticks are spoken as visible text while code-shaped
-  spans retain the `代码` placeholder.
+  spans retain the `代码` placeholder. The public `/hooks` command label stays
+  visible without relaxing the fail-closed handling of arbitrary local paths.
+  Full speech runs one sentence per local `say` process, with oversized
+  sentences split again at 180 characters, so a voice-engine early completion
+  cannot discard every later sentence in the response.
 
 Important completed, blocked, and action-required announcements begin with the
 real Codex task title. The lead follows the conversation language and known
@@ -158,11 +162,13 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-Version 0.2.7 is the current Marketplace release and adds the production logo
-and GitHub homepage to the Codex plugin details page. Version 0.2.6 added the
-stable Stop launcher for upgrade-safe task completion. Version 0.2.5 introduced
-the v3 SessionStart marker for task-title leads; the parser retains v1 and v2
-compatibility.
+Version 0.2.8 is the current Marketplace release and preserves the public
+`/hooks` command label in Full mode while isolating sentences into bounded
+local `say` calls to prevent later speech from being lost when a voice engine
+finishes early. Version 0.2.7 added the production logo and GitHub homepage to
+the Codex plugin details page. Version 0.2.6 added the stable Stop launcher for
+upgrade-safe task completion. Version 0.2.5 introduced the v3 SessionStart
+marker for task-title leads; the parser retains v1 and v2 compatibility.
 
 ## Test and validate
 

@@ -204,7 +204,7 @@ class PackagingTests(unittest.TestCase):
                     "source": {
                         "source": "url",
                         "url": "https://github.com/Howe829/codex-speak.git",
-                        "ref": "v0.2.7",
+                        "ref": "v0.2.8",
                     },
                     "policy": {
                         "installation": "AVAILABLE",
@@ -216,8 +216,8 @@ class PackagingTests(unittest.TestCase):
         }
         self.assertEqual(marketplace, expected)
         self.assertEqual(marketplace["plugins"][0]["name"], manifest["name"])
-        self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.7")
-        self.assertEqual(manifest["version"], "0.2.7")
+        self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.8")
+        self.assertEqual(manifest["version"], "0.2.8")
 
     def test_readme_displays_only_the_approved_github_poster(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -465,7 +465,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "codex-speak")
         self.assertRegex(
             manifest["version"],
-            r"^0\.2\.7(?:\+codex\.[a-z0-9-]+)?$",
+            r"^0\.2\.8(?:\+codex\.[a-z0-9-]+)?$",
         )
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(

@@ -10,7 +10,11 @@ from hooks.stop import handle_event
 from codex_speak.hook_runtime import install_stop_launcher
 from codex_speak.bridge import run_bridge
 from codex_speak.queue import enqueue
-from codex_speak.render import SpeechPayload, normalize_full_text, segment_text
+from codex_speak.render import (
+    SpeechPayload,
+    normalize_full_text,
+    segment_full_text,
+)
 from codex_speak.worker import run_worker
 
 
@@ -101,7 +105,7 @@ class PrivacyAndPackagingTests(unittest.TestCase):
             f"https://example.invalid/{canaries['url']} "
             f"/private/tmp/{canaries['path']} {canaries['segment']}"
         )
-        expected_segments = segment_text(normalize_full_text(visible_body))
+        expected_segments = segment_full_text(normalize_full_text(visible_body))
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -196,7 +200,7 @@ class PrivacyAndPackagingTests(unittest.TestCase):
                     + ("second filler " * 70)
                 )
                 normalized = normalize_full_text(visible_body)
-                expected_segments = segment_text(normalized)
+                expected_segments = segment_full_text(normalized)
                 self.assertGreaterEqual(len(expected_segments), 2)
                 self.assertIn("代码", normalized)
                 self.assertIn("链接", normalized)
@@ -420,8 +424,8 @@ class PrivacyAndPackagingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         for required in (
-            r"current public Marketplace release is version 0\.2\.7",
-            r"source ref is `v0\.2\.7`",
+            r"current public Marketplace release is version 0\.2\.8",
+            r"source ref is `v0\.2\.8`",
             "runtime-hooks/stop_launcher.py",
             r"same Marketplace and plugin cache family",
             "start a new task",

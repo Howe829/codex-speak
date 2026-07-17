@@ -11,6 +11,7 @@ from .protocol import ParsedResponse, TASK_TITLE_PLACEHOLDER
 
 SpeechMode = Literal["summary", "full"]
 MAX_SEGMENT_CHARS: Final[int] = 600
+FULL_SEGMENT_CHARS: Final[int] = 180
 MAX_TASK_TITLE_CHARS: Final[int] = 80
 
 _FENCE_OPEN_RE = re.compile(
@@ -34,6 +35,9 @@ _EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
 _WHITESPACE_RE = re.compile(r"\s+")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？.!?")
+_UNCONDITIONAL_SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？!?")
+_SENTENCE_CLOSERS: Final[frozenset[str]] = frozenset("'’」』】）)]}")
+_SAFE_INLINE_LABELS: Final[frozenset[str]] = frozenset({"/hooks"})
 _DOUBLE_QUOTE_TRANSLATION: Final[dict[int, None]] = str.maketrans(
     "", "", '\"“”„‟＂'
 )
@@ -192,6 +196,8 @@ def _replace_inline_code(match: re.Match[str]) -> str:
 def _inline_label(match: re.Match[str]) -> str | None:
     ticks = match.group("ticks")
     content = match.group("content").strip()
+    if len(ticks) == 1 and content in _SAFE_INLINE_LABELS:
+        return content
     is_label = (
         len(ticks) == 1
         and 1 <= len(content) <= 32
@@ -598,6 +604,45 @@ def segment_text(
     return tuple(segments)
 
 
+def segment_full_text(
+    value: str, limit: int = FULL_SEGMENT_CHARS
+) -> tuple[str, ...]:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    if not value:
+        return ()
+
+    segments: list[str] = []
+    start = 0
+    cursor = 0
+    while cursor < len(value):
+        character = value[cursor]
+        if character not in _SENTENCE_ENDINGS:
+            cursor += 1
+            continue
+
+        end = cursor + 1
+        while end < len(value) and value[end] in _SENTENCE_ENDINGS:
+            end += 1
+        while end < len(value) and value[end] in _SENTENCE_CLOSERS:
+            end += 1
+        if (
+            character not in _UNCONDITIONAL_SENTENCE_ENDINGS
+            and end < len(value)
+            and not value[end].isspace()
+        ):
+            cursor += 1
+            continue
+
+        segments.extend(segment_text(value[start:end], limit=limit))
+        start = end
+        cursor = end
+
+    if start < len(value):
+        segments.extend(segment_text(value[start:], limit=limit))
+    return tuple(segments)
+
+
 def render_speech(
     response: ParsedResponse,
     mode: SpeechMode,
@@ -618,7 +663,11 @@ def render_speech(
             response.speech_lead_template, task_title
         ) + text
 
-    segments = segment_text(text)
+    segments = (
+        segment_full_text(text)
+        if mode == "full"
+        else segment_text(text)
+    )
     if not segments:
         return None
     return SpeechPayload(mode, response.status, segments)

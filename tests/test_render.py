@@ -47,7 +47,7 @@ class RenderTests(unittest.TestCase):
             SpeechPayload(
                 "full",
                 "completed",
-                ("豪哥，任务：真实标题已完成。完整正文。",),
+                ("豪哥，任务：真实标题已完成。", "完整正文。"),
             ),
         )
         self.assertEqual(
@@ -190,6 +190,16 @@ class RenderTests(unittest.TestCase):
             normalize_full_text(body),
             "模式为 Full、Summary、codex-speak、语音模式 和 two words。",
         )
+
+    def test_preserves_hooks_command_without_exposing_inline_paths(self) -> None:
+        cases = {
+            "`/hooks`": "/hooks",
+            "`/private`": "代码",
+            "`/Users/private`": "代码",
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(normalize_full_text(body), expected)
 
     def test_replaces_code_shaped_and_ambiguous_inline_spans(self) -> None:
         cases = (
@@ -457,6 +467,38 @@ class RenderTests(unittest.TestCase):
         assert payload is not None
         self.assertTrue(all(1 <= len(part) <= 600 for part in payload.segments))
         self.assertEqual("".join(payload.segments), text)
+
+    def test_full_mode_isolates_each_sentence_for_independent_playback(self) -> None:
+        text = "第一句。第二句！第三句？尾句"
+
+        payload = render_speech(ParsedResponse("silent", "", text), "full")
+
+        self.assertEqual(
+            payload,
+            SpeechPayload(
+                "full",
+                "silent",
+                ("第一句。", "第二句！", "第三句？", "尾句"),
+            ),
+        )
+
+    def test_full_mode_hard_splits_oversized_single_sentence_without_loss(self) -> None:
+        text = "甲" * 181
+
+        payload = render_speech(ParsedResponse("silent", "", text), "full")
+
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(tuple(map(len, payload.segments)), (180, 1))
+        self.assertEqual("".join(payload.segments), text)
+
+    def test_summary_mode_keeps_short_multi_sentence_summary_together(self) -> None:
+        response = ParsedResponse("completed", "第一句。第二句。", "完整正文。")
+
+        self.assertEqual(
+            render_speech(response, "summary"),
+            SpeechPayload("summary", "completed", ("第一句。第二句。",)),
+        )
 
     def test_segment_boundaries_and_hard_split(self) -> None:
         self.assertEqual(segment_text("甲" * 600), ("甲" * 600,))
