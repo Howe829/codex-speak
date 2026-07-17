@@ -59,6 +59,12 @@ The menu bar checkmark selects one speech mode:
   prose labels in single backticks are spoken as visible text while code-shaped
   spans retain the `代码` placeholder.
 
+Important completed, blocked, and action-required announcements begin with the
+real Codex task title. The lead follows the conversation language and known
+form of address; unknown users get a neutral lead. Codex Speak reads the title
+locally through Codex `thread/read` and falls back to `current task` (or the
+Chinese equivalent) when lookup does not finish within 1.5 seconds.
+
 Important announcements follow the active primary instruction. Internal
 commands, temporary files, tests, test fixtures, validation artifacts, and
 tool mechanics remain unspoken unless explicitly requested. Language,
@@ -97,6 +103,11 @@ diagnostics. Speech exists temporarily in a private `0600` queue under
 older than five minutes. Speech reaches `/usr/bin/say` only through standard
 input, never process arguments.
 
+The task title is temporary speech content: it receives the same private queue
+permissions and claim-before-playback lifecycle as the rest of the speech. Raw
+thread IDs, titles, and app-server output never enter diagnostics. The local
+title read does not add a network service.
+
 Diagnostics contain only timestamps, hashed event identifiers, allowlisted
 status/outcome values, counts, duration, and fixed error codes. The menu
 helper-state contains only its schema version, starting/running phase, PID,
@@ -122,9 +133,13 @@ imported; mode and queue state begin cleanly under the Codex Speak plugin data
 directory.
 
 New tasks use an unused CommonMark reference definition for private speech
-control metadata, so the marker is not shown in rendered responses. Tasks
-started before version 0.2.1 may keep displaying the transitional v1 HTML
-comment until a new task loads the v2 SessionStart instructions.
+control metadata, so the marker is not shown in rendered responses.
+
+This repository's source candidate is version 0.2.5.
+
+Version 0.2.5 introduces the v3 SessionStart marker for task-title leads. The
+parser retains v1 and v2 compatibility, but existing tasks keep their original
+protocol behavior until a newly started task loads v3.
 
 ## Test and validate
 
@@ -198,6 +213,8 @@ continue in the new one; tasks bind lifecycle hook paths when they start.
   bundled hooks in `/hooks`.
 - No speech in an existing thread: start a new thread so SessionStart injects
   the protocol.
+- A generic `current task` lead means the bounded local title lookup failed or
+  the thread was untitled; speech itself continues normally.
 - A speech-control comment is visible below a response: the task still has the
   pre-0.2.1 protocol; start a new task after reinstalling and trusting hooks.
 - Menu missing but speech works: the Python fallback is active; run

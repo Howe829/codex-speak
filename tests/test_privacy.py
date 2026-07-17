@@ -424,6 +424,15 @@ class PrivacyAndPackagingTests(unittest.TestCase):
             "./scripts/build_menu_app.sh",
             "ad hoc",
             "signed sharing",
+            "real Codex task title",
+            "completed, blocked, and action-required",
+            "current task",
+            "thread/read",
+            "1.5 seconds",
+            "version 0.2.5",
+            "v3 SessionStart",
+            "v1 and v2",
+            "task title is temporary speech content",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, readme)

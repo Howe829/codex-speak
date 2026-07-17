@@ -308,7 +308,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "codex-speak")
         self.assertRegex(
             manifest["version"],
-            r"^0\.2\.4(?:\+codex\.[a-z0-9-]+)?$",
+            r"^0\.2\.5(?:\+codex\.[a-z0-9-]+)?$",
         )
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(
