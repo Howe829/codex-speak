@@ -7,6 +7,7 @@ import time
 import unittest
 
 from hooks.stop import handle_event
+from codex_speak.hook_runtime import install_stop_launcher
 from codex_speak.bridge import run_bridge
 from codex_speak.queue import enqueue
 from codex_speak.render import SpeechPayload, normalize_full_text, segment_text
@@ -18,6 +19,33 @@ def summary_payload(status: str, text: str) -> SpeechPayload:
 
 
 class PrivacyAndPackagingTests(unittest.TestCase):
+    def test_installed_stable_launcher_is_static_and_stop_command_is_fixed(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        canaries = (
+            "PRIVATE_LAUNCHER_THREAD_14529",
+            "PRIVATE_LAUNCHER_TASK_26781",
+            "PRIVATE_LAUNCHER_SPEECH_39842",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "plugin-data"
+            self.assertTrue(install_stop_launcher(root, data_dir))
+            installed = data_dir / "runtime-hooks" / "stop_launcher.py"
+            packaged = root / "hooks" / "stop_launcher.py"
+            self.assertEqual(installed.read_bytes(), packaged.read_bytes())
+            for canary in canaries:
+                self.assertNotIn(canary.encode("utf-8"), installed.read_bytes())
+
+        config = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertEqual(
+            command,
+            'if [ -f "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py" ]; then '
+            'python3 -B "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py"; '
+            'else python3 -B "${PLUGIN_ROOT}/hooks/stop.py"; fi',
+        )
+        self.assertNotRegex(command, r"\$\{?(?:INPUT|HOOK_INPUT|stdin)\}?")
+        self.assertEqual(command.count("${PLUGIN_DATA}"), 2)
+        self.assertEqual(command.count("${PLUGIN_ROOT}"), 1)
     def test_task_title_and_app_server_failure_never_enter_diagnostics(self) -> None:
         title_secret = "PRIVATE_TASK_TITLE_48291"
         server_secret = "PRIVATE_APP_SERVER_ERROR_59317"

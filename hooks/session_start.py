@@ -11,6 +11,7 @@ if str(DEFAULT_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(DEFAULT_PLUGIN_ROOT))
 
 from codex_speak.helper import ensure_consumer
+from codex_speak.hook_runtime import install_stop_launcher
 
 
 PROTOCOL_CONTEXT = """
@@ -44,8 +45,13 @@ def ensure_started(
     plugin_root: Path,
     data_dir: Path,
     *,
+    install_launcher=install_stop_launcher,
     start_consumer=ensure_consumer,
 ) -> None:
+    try:
+        install_launcher(plugin_root, data_dir)
+    except BaseException:
+        pass
     try:
         start_consumer(plugin_root, data_dir)
     except BaseException:

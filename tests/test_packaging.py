@@ -11,10 +11,36 @@ import tempfile
 import unittest
 import zlib
 
+from codex_speak.hook_runtime import install_stop_launcher
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "assets" / "CodexSpeakMenu.app"
 EXECUTABLE = APP / "Contents" / "MacOS" / "CodexSpeakMenu"
+
+
+def make_fake_runtime(family: Path, version: str) -> Path:
+    root = family / version
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / "hooks").mkdir()
+    (root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "codex-speak", "version": version}),
+        encoding="utf-8",
+    )
+    (root / "hooks" / "stop_launcher.py").write_bytes(
+        (ROOT / "hooks" / "stop_launcher.py").read_bytes()
+    )
+    (root / "hooks" / "stop.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "import sys\n"
+        "expected = Path(__file__).resolve().parents[1]\n"
+        "if Path(os.environ['PLUGIN_ROOT']).resolve() != expected:\n"
+        "    raise SystemExit(7)\n"
+        "sys.stdout.write(sys.stdin.read())\n",
+        encoding="utf-8",
+    )
+    return root
 
 
 def _paeth_predictor(left: int, above: int, upper_left: int) -> int:
@@ -93,6 +119,68 @@ def _read_png_rgba(path: Path) -> tuple[int, int, list[bytes]]:
 
 
 class PackagingTests(unittest.TestCase):
+    def test_captured_stop_command_survives_deletion_of_original_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            family = base / "cache" / "howe829" / "codex-speak"
+            version_a = make_fake_runtime(family, "0.2.6")
+            data_dir = base / "plugin-data"
+            self.assertTrue(install_stop_launcher(version_a, data_dir))
+
+            config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+            captured_command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
+            shutil.rmtree(version_a)
+            version_b = make_fake_runtime(family, "0.2.7")
+
+            canary = '{"message":"PRIVATE-UPGRADE-CANARY"}\n'
+            environment = os.environ.copy()
+            environment["PLUGIN_ROOT"] = str(version_a)
+            environment["PLUGIN_DATA"] = str(data_dir)
+            completed = subprocess.run(
+                captured_command,
+                shell=True,
+                executable="/bin/sh",
+                cwd=base,
+                env=environment,
+                input=canary,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(completed.stdout, canary)
+            self.assertEqual(completed.stderr, "")
+            self.assertTrue(version_b.is_dir())
+            self.assertNotIn("PRIVATE-UPGRADE-CANARY", captured_command)
+            self.assertNotIn("PRIVATE-UPGRADE-CANARY", " ".join(completed.args))
+            for path in data_dir.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(b"PRIVATE-UPGRADE-CANARY", path.read_bytes())
+
+    def test_stop_command_falls_back_to_original_version_hook_without_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            family = base / "cache" / "howe829" / "codex-speak"
+            version_a = make_fake_runtime(family, "0.2.6")
+            data_dir = base / "plugin-data"
+            config = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+            captured_command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
+            environment = os.environ.copy()
+            environment["PLUGIN_ROOT"] = str(version_a)
+            environment["PLUGIN_DATA"] = str(data_dir)
+            completed = subprocess.run(
+                captured_command,
+                shell=True,
+                executable="/bin/sh",
+                cwd=base,
+                env=environment,
+                input="fallback input\n",
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(completed.stdout, "fallback input\n")
+            self.assertEqual(completed.stderr, "")
+
     def test_public_marketplace_exposes_codex_speak_from_github(self) -> None:
         marketplace_path = ROOT / ".agents" / "plugins" / "marketplace.json"
         self.assertTrue(marketplace_path.is_file(), marketplace_path)
@@ -229,9 +317,20 @@ class PackagingTests(unittest.TestCase):
 
     def test_python_plugin_entries_do_not_write_bytecode_into_installed_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            installed_root = Path(temporary) / "installed" / "codex-speak"
+            installed_root = (
+                Path(temporary)
+                / "cache"
+                / "howe829"
+                / "codex-speak"
+                / "0.2.5"
+            )
             installed_root.mkdir(parents=True)
             ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+            shutil.copytree(
+                ROOT / ".codex-plugin",
+                installed_root / ".codex-plugin",
+                ignore=ignore_bytecode,
+            )
             shutil.copytree(
                 ROOT / "codex_speak",
                 installed_root / "codex_speak",
@@ -247,9 +346,11 @@ class PackagingTests(unittest.TestCase):
             environment.pop("PYTHONDONTWRITEBYTECODE", None)
             environment.pop("PYTHONPYCACHEPREFIX", None)
             environment["PLUGIN_ROOT"] = str(installed_root)
+            environment["PLUGIN_DATA"] = str(data_dir)
 
             commands = (
                 ([sys.executable, "-B", str(installed_root / "hooks" / "session_start.py")], None),
+                ([sys.executable, "-B", str(data_dir / "runtime-hooks" / "stop_launcher.py")], "{}"),
                 ([sys.executable, "-B", str(installed_root / "hooks" / "stop.py")], "{}"),
                 ([sys.executable, "-B", "-m", "codex_speak.settings", "--data-dir", str(data_dir), "get"], None),
                 ([sys.executable, "-B", "-m", "codex_speak.queue", "--data-dir", str(data_dir), "clear-pending"], None),
@@ -300,6 +401,12 @@ class PackagingTests(unittest.TestCase):
                 if path.name == "__pycache__" or path.suffix == ".pyc"
             ]
             self.assertEqual(bytecode, [])
+            runtime_bytecode = [
+                path.relative_to(data_dir / "runtime-hooks")
+                for path in (data_dir / "runtime-hooks").rglob("*")
+                if path.name == "__pycache__" or path.suffix == ".pyc"
+            ]
+            self.assertEqual(runtime_bytecode, [])
 
     def test_manifest_has_exact_identity_and_only_supported_fields(self) -> None:
         manifest = json.loads(

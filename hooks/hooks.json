@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/stop.py\""
+            "command": "if [ -f \"${PLUGIN_DATA}/runtime-hooks/stop_launcher.py\" ]; then python3 -B \"${PLUGIN_DATA}/runtime-hooks/stop_launcher.py\"; else python3 -B \"${PLUGIN_ROOT}/hooks/stop.py\"; fi"
           }
         ]
       }

@@ -158,6 +158,33 @@ class HookTests(unittest.TestCase):
             start_consumer=lambda *_: (_ for _ in ()).throw(OSError("private")),
         )
 
+    def test_session_start_installs_launcher_before_starting_consumer(self) -> None:
+        calls = []
+        ensure_started(
+            Path("/plugin"),
+            Path("/data"),
+            install_launcher=lambda root, data: calls.append(("install", root, data))
+            or True,
+            start_consumer=lambda root, data: calls.append(("consumer", root, data)),
+        )
+        self.assertEqual(
+            calls,
+            [
+                ("install", Path("/plugin"), Path("/data")),
+                ("consumer", Path("/plugin"), Path("/data")),
+            ],
+        )
+
+    def test_session_start_launcher_failure_does_not_block_consumer_or_context(self) -> None:
+        started = []
+        ensure_started(
+            Path("/plugin"),
+            Path("/data"),
+            install_launcher=lambda root, data: (_ for _ in ()).throw(OSError("private")),
+            start_consumer=lambda root, data: started.append((root, data)),
+        )
+        self.assertEqual(started, [(Path("/plugin"), Path("/data"))])
+
     def test_stop_summary_enqueues_important_event_and_starts_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data"
@@ -693,11 +720,17 @@ class HookTests(unittest.TestCase):
             session_command,
             'python3 -B "${PLUGIN_ROOT}/hooks/session_start.py"',
         )
-        self.assertEqual(
-            stop_command,
-            'python3 -B "${PLUGIN_ROOT}/hooks/stop.py"',
+        expected_stop = (
+            'if [ -f "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py" ]; then '
+            'python3 -B "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py"; '
+            'else python3 -B "${PLUGIN_ROOT}/hooks/stop.py"; fi'
         )
-        self.assertNotIn("PLUGIN_DATA", session_command + stop_command)
+        self.assertEqual(stop_command, expected_stop)
+        self.assertIn("PLUGIN_DATA", stop_command)
+        self.assertNotIn("PLUGIN_DATA", session_command)
+        self.assertEqual(stop_command.count("python3 -B"), 2)
+        self.assertIn('"${PLUGIN_DATA}/runtime-hooks/stop_launcher.py"', stop_command)
+        self.assertIn('"${PLUGIN_ROOT}/hooks/stop.py"', stop_command)
 
 
 if __name__ == "__main__":
