@@ -2,7 +2,8 @@
 
 ## Status
 
-Approved for implementation on 2026-07-17.
+Simplified design approved in conversation on 2026-07-17. This revision
+supersedes the active same-account mutation hardening added during review.
 
 ## Problem
 
@@ -13,128 +14,132 @@ path such as `.../codex-speak/0.2.5/hooks/stop.py`, which no longer exists, even
 though the newly installed plugin contains a complete Stop hook.
 
 This is an upgrade-lifecycle problem, not a packaging omission. It has repeated
-across multiple Codex Speak versions and marketplaces because every released
-Stop command directly references `${PLUGIN_ROOT}/hooks/stop.py`.
+because released Stop commands directly referenced a version-specific
+`${PLUGIN_ROOT}/hooks/stop.py`.
 
 ## Goals
 
-- Tasks started with the new architecture continue running their Stop hook after
-  later Marketplace upgrades delete their original version cache.
-- The Stop entry point remains stable across plugin versions without requiring
-  users to create compatibility symlinks manually.
-- The launcher executes code only from the same plugin and Marketplace cache
-  family that the task originally trusted.
-- Assistant messages, user input, thread IDs, task titles, and speech text never
-  enter launcher files, process arguments, diagnostics, or error output.
-- Missing, corrupt, or uninstalled runtime candidates fail quietly
-  with a valid empty hook result instead of a Python path error.
-- Normal non-upgrade hook behavior, queue privacy, menu-helper startup, v1/v2/v3
-  parsing, and Silent/Summary/Full semantics remain unchanged.
+- Tasks started with the fixed architecture continue running their Stop hook
+  after later Marketplace upgrades delete their original version cache.
+- The Stop entry point remains stable across plugin versions without manual
+  compatibility symlinks.
+- Runtime selection stays within the task's original Marketplace/plugin family.
+- Pre-existing symlink layouts, malformed manifests, wrong plugin identities,
+  unsupported versions, and missing runtimes fail closed.
+- Assistant messages, user input, task titles, IDs, and speech text never enter
+  launcher files, process arguments, diagnostics, or error output.
+- Missing or invalid runtime candidates produce a valid empty hook result
+  instead of a Python path error.
+- Queue privacy, menu-helper startup, protocol parsing, and
+  Silent/Summary/Full behavior remain unchanged.
+
+## Threat Model
+
+Codex Speak trusts the current macOS account's Codex-managed plugin cache and
+plugin-data directory during an individual hook invocation. A process running
+as that same account can already modify Codex configuration, installed plugin
+code, the stable launcher, and speech runtime data; Codex Speak is not a local
+privilege or code-signing boundary against that account.
+
+The design defends against:
+
+- Marketplace upgrades deleting the version directory captured by an open task;
+- a symlinked Marketplace identity, plugin family, version root, manifest, or
+  Stop file that already exists when selection begins;
+- malformed, mismatched, unreadable, nested, or unsupported runtime candidates;
+- partial or concurrent SessionStart writes of the stable launcher;
+- unavailable runtime state and ordinary pre-exec failures.
+
+The design does not defend against the current account deliberately replacing
+plugin files after validation while the same Stop invocation is executing. In
+particular, it does not snapshot Python modules, keep an entire runtime open by
+descriptor, or redirect worker/menu-helper launches away from the trusted cache.
+Those measures add substantial complexity without creating a meaningful trust
+boundary against the account that also owns `PLUGIN_DATA`.
 
 ## Non-goals
 
 - Changing Codex's global plugin-cache retention policy.
-- Making tasks that started before this hook definition was installed
-  retroactively adopt the new command. The local `0.2.4 -> 0.2.5` compatibility
-  link remains a one-time bridge for the currently open task.
-- Supporting migration between different Marketplace identities such as
-  `personal` and `howe829`; Codex treats them as different plugin installations.
-- Executing hooks from arbitrary repositories, user-selected paths, or network
-  locations.
+- Retrofitting tasks whose hook command was captured before the fixed release.
+- Supporting migration between Marketplace identities such as `personal` and
+  `howe829`.
+- Defending against active same-account mutation during one hook invocation.
+- Copying or retaining a complete versioned plugin runtime under `PLUGIN_DATA`.
 - Publishing, tagging, changing the public Marketplace ref, or reinstalling the
   source candidate as part of implementation.
 
 ## Evaluated Approaches
 
-### 1. Stable launcher under `PLUGIN_DATA` — selected
+### 1. Lightweight stable launcher under `PLUGIN_DATA` — selected
 
-SessionStart atomically installs a standalone launcher into the plugin's stable
-data directory. The stored Stop command invokes that launcher instead of a
-version-specific cache path. The launcher locates and executes the current
-valid Codex Speak cache from the same Marketplace family.
+SessionStart atomically installs a standalone launcher in stable private plugin
+data. Stop invokes it instead of a version-specific path. The launcher validates
+the original cache family at selection time, selects a valid current version,
+updates `PLUGIN_ROOT`, and directly executes that version's Stop hook.
 
-This keeps the hook command small, the launcher independently testable, and the
-runtime private. It depends only on the existing lifecycle guarantee that
-SessionStart runs before Stop for a task.
+This addresses the observed upgrade failure with a small, independently tested
+component and keeps ordinary Stop/worker/helper behavior unchanged.
 
-### 2. Inline Python resolver in `hooks.json` — rejected
+### 2. Versioned full-runtime snapshots under `PLUGIN_DATA` — rejected
 
-A self-contained `python3 -c` command could locate the current cache without a
-bootstrap file. It would survive cache deletion, but the JSON-embedded program
-would be difficult to read, quote, audit, test, and evolve safely.
+SessionStart could copy Python sources, hooks, assets, and the menu helper into a
+stable versioned snapshot and run every child from it. That avoids later cache
+reopens but adds large copies, retention and cleanup policy, update coordination,
+and another mutable same-account code store. The observed upgrade bug does not
+justify that operational cost.
 
-### 3. Upgrade-time compatibility symlinks — rejected as the product fix
+### 3. Descriptor execution plus in-memory module snapshots — rejected
 
-Creating `old-version -> new-version` links fixes one machine and one upgrade.
-Ordinary Marketplace users do not run a Codex Speak post-install script, so the
-same failure would recur publicly. A symlink remains useful only as a temporary
-transition aid for tasks created before the stable command exists.
+A review prototype retained runtime descriptors, executed an opened Stop file,
+snapshotted plugin modules, and installed a custom import finder. The launcher
+grew from roughly 140 to more than 500 lines yet still could not cover
+unqualified imports and worker/menu-helper path launches without redesigning the
+whole runtime. This is over-engineering under the selected threat model.
 
 ## Architecture
 
 ### Packaged launcher
 
-Add `hooks/stop_launcher.py` as a standalone Python-standard-library program.
-It must not import `codex_speak`, because the copied launcher runs outside the
+`hooks/stop_launcher.py` is a standalone Python-standard-library program. It
+does not import `codex_speak`, because its installed copy runs outside the
 versioned plugin tree.
 
 The launcher receives the task's original `PLUGIN_ROOT` and stable
-`PLUGIN_DATA` environment from Codex. It does not parse hook stdin. Once it has
-selected a valid current Stop hook, it sets `PLUGIN_ROOT` to that current root.
-It opens the selected Stop source with no-follow semantics through the already
-validated family, candidate, and hooks directory descriptors. It retains the
-validated runtime-root descriptor alongside the validated Stop regular-file
-descriptor, marks only those two descriptors inheritable, and uses `os.execv`
-to replace itself with a fixed standard-library bootstrap:
+`PLUGIN_DATA`. It never reads hook stdin. It validates the original
+Marketplace/plugin family and candidate metadata at selection time, then:
 
-```text
-python3 -B -c FIXED_BOOTSTRAP VALIDATED_ROOT_FD VALIDATED_STOP_FD TRUSTED_ROOT_PATH TRUSTED_STOP_PATH
-```
+1. chooses the original valid runtime when it still exists;
+2. otherwise chooses the highest valid direct sibling version;
+3. sets `PLUGIN_ROOT` to the selected root; and
+4. replaces itself with `python3 -B SELECTED_ROOT/hooks/stop.py`.
 
-The bootstrap consumes the exact Stop source and snapshots bounded Python
-sources for the `codex_speak` and `hooks` namespaces by opening them with
-no-follow semantics relative to the validated runtime-root descriptor. It then
-closes every inherited descriptor before normal Stop code can run or spawn a
-worker/helper. A fixed in-memory finder resolves plugin imports only from that
-validated snapshot and fails closed for missing plugin modules, so replacement
-of the logical version/root/hooks paths cannot redirect imports. The bootstrap
-compiles the opened Stop source with the trusted logical Stop path as
-`__file__`, restores direct-script `sys.argv` and import-path semantics, and
-executes it as `__main__`.
+Standard input, output, error, and unrelated environment values remain attached.
+The launcher introduces no assistant or speech content into argv or storage.
 
-Standard input, standard output, standard error, and every existing environment
-value remain attached; only `PLUGIN_ROOT` is intentionally updated. Speech
-content never appears in arguments, environment updates, launcher storage,
-hashes, diagnostics, or error output.
+The final path execution intentionally relies on the trusted-current-account
+assumption. It is not an atomic handoff against a concurrent same-account path
+replacement.
 
 ### Atomic launcher installation
 
-Add `codex_speak/hook_runtime.py` with:
+`codex_speak/hook_runtime.py` exposes:
 
 ```python
 install_stop_launcher(plugin_root: Path, data_dir: Path) -> bool
 ```
 
-SessionStart calls this before starting the consumer or returning protocol
-context. The installer:
+SessionStart calls it before starting the consumer. The installer copies the
+fixed packaged launcher into `${PLUGIN_DATA}/runtime-hooks/stop_launcher.py`
+using a private `0700` directory, a unique `0600` temporary file, `fsync`, and
+atomic `os.replace`. It rejects symlinked source/runtime paths, cleans only its
+own temporary file, and returns `False` silently on failure.
 
-1. Reads the packaged `hooks/stop_launcher.py` from the trusted plugin root.
-2. Creates `${PLUGIN_DATA}/runtime-hooks` with mode `0700`.
-3. Writes a unique temporary file in that directory, applies mode `0600`,
-   flushes and fsyncs it, then atomically replaces `stop_launcher.py`.
-4. Normalizes permissions even when identical content is already installed.
-5. Cleans temporary files and returns `False` on any failure without emitting
-   raw paths or errors.
-
-Concurrent SessionStart hooks may race, but `os.replace` guarantees that Stop
-sees either one complete launcher or another complete launcher, never partial
-content.
+Concurrent SessionStart runs leave one complete launcher, never a partial file.
 
 ### Stable Stop command
 
-Change the Stop command in `hooks/hooks.json` to prefer the stable launcher and
-fall back to the current versioned Stop hook if SessionStart could not install
-it:
+The Stop command prefers the stable launcher and retains the original path as a
+pre-upgrade fallback:
 
 ```sh
 if [ -f "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py" ]; then
@@ -144,114 +149,95 @@ else
 fi
 ```
 
-Both paths remain quoted. The command contains no assistant content and keeps
-bytecode generation disabled.
+Both paths are quoted and bytecode generation stays disabled.
 
 ## Runtime Selection
 
-The launcher follows this order:
+At selection time the launcher:
 
-1. If the task's original real, non-symlink Stop hook still exists and its
-   manifest is valid, execute it. This preserves exact-version behavior when
-   Codex later begins retaining old caches.
-2. Open the Marketplace identity directory with
-   `O_DIRECTORY | O_NOFOLLOW` relative to its already-open parent, validate its
-   identity, then open the `codex-speak` family relative to that Marketplace
-   descriptor with the same flags. A symlinked Marketplace identity/family or
-   an identity change fails closed. Enumerate only direct version children
-   through the anchored family descriptor.
-3. Ignore symlink roots, non-directories, unreadable entries, version names
-   outside the supported numeric release/build format, manifests with a name
-   other than `codex-speak`, manifest versions that differ from the directory
-   name, and symlinked or missing Stop hook files.
-4. Select the highest valid numeric version. A formal `+codex.*` build is used
-   only as a deterministic tie-breaker within the same numeric version.
-5. Open and validate candidate directories, manifests, hooks directories, and
-   the Stop regular file relative to their already-open parent descriptors.
-   Recheck the family identity before handoff, then execute only the opened Stop
-   descriptor rather than reopening its path.
+1. Requires a supported numeric version name for the original root.
+2. Rejects a pre-existing symlink at the Marketplace identity, `codex-speak`
+   family, original/candidate version root, manifest, or Stop file.
+3. Resolves the Marketplace identity and family and verifies their expected
+   parent/child containment.
+4. Accepts the original runtime first when its manifest and Stop hook are valid.
+5. Otherwise inspects only a bounded set of direct family children; it never
+   recurses or crosses to another Marketplace directory.
+6. Requires manifest name `codex-speak` and a manifest version exactly matching
+   the directory name.
+7. Selects the highest numeric release, using formal `+codex.*` only as a
+   deterministic same-release tie-breaker.
+8. Rechecks resolved containment before direct execution.
 
-The scan never crosses to another Marketplace directory and performs no
-network access.
+The launcher performs no network access.
 
 ## Failure Handling and Privacy
 
-- If no valid runtime exists, write exactly `{}` plus a newline and exit zero.
-- If family opening, candidate inspection, descriptor handoff, or `execv`
-  fails, do the same without writing stderr.
+- No valid runtime or any pre-exec failure writes exactly `{}` plus newline,
+  writes nothing to stderr, and exits zero.
 - The launcher never reads, logs, hashes, copies, or persists hook stdin.
-- The only persistent code is the fixed launcher source itself, protected by
-  the existing private plugin-data directory.
-- No diagnostic contains cache paths, raw exceptions, hook messages, thread
-  identifiers, titles, or speech.
-- The versioned fallback preserves current behavior when launcher installation
-  fails before any upgrade; after a cache deletion, the stable launcher is the
-  compatibility boundary.
+- Persistent launcher code is fixed source only; it contains no dynamic task or
+  speech data.
+- Diagnostics contain no cache paths, raw exceptions, messages, IDs, titles, or
+  speech.
+- The fallback preserves current behavior if launcher installation failed before
+  an upgrade.
 
 ## Transition Semantics
 
-This architecture becomes effective for tasks whose SessionStart and stored
-Stop definition come from the new release. It cannot rewrite hook commands
-already captured by older tasks. Therefore:
+The architecture applies only to tasks whose SessionStart and stored Stop
+definition come from the fixed release. It cannot rewrite commands captured by
+older tasks. Therefore:
 
-- the current local `0.2.4 -> 0.2.5` link remains until all pre-fix tasks close;
-- the first release containing this design establishes forward compatibility;
-- tasks started on that release must survive the next upgrade without any link;
-- public upgrade guidance still tells users to start a new task immediately
-  after installing the first fixed release.
+- the local `0.2.4 -> 0.2.5` link remains until pre-fix tasks close;
+- the first fixed release establishes forward compatibility;
+- tasks started on that release survive later ordinary Marketplace replacement;
+- public guidance tells users to start a new task immediately after installing
+  the first fixed release.
+
+## Branch Simplification
+
+Implementation uses new non-destructive revert/fix commits; it does not rewrite
+published or reviewed history. The simplification removes only the last two
+active-mutation hardening commits. It preserves the stable launcher, atomic
+installer, SessionStart/Stop wiring, upgrade regression, privacy tests, and
+`0.2.6` candidate documentation. Small packaging sentinel and formatting fixes
+from the reverted commits are reapplied explicitly.
 
 ## Testing
 
-### Unit tests
+### Unit and integration tests
 
-- Launcher installation is atomic, private, idempotent, byte-for-byte exact,
-  and leaves no temporary files after success or failure.
-- Concurrent installers always leave one complete valid launcher.
-- The resolver accepts the original valid root, then accepts a newer valid
-  sibling after the original is deleted.
-- It rejects symlink families/roots/hooks, family identity changes, wrong names,
-  mismatched versions, malformed manifests, nested paths, and unsupported
-  version strings.
-- A deterministic Marketplace-identity ancestor-symlink regression proves that
-  no runtime reached through another Marketplace identity is selected or
-  executed.
-- A deterministic cross-Marketplace family-symlink regression proves that no
-  external runtime is selected or executed.
-- A deterministic post-validation replacement regression proves that the
-  originally opened Stop source executes and that its inherited descriptor is
-  closed before Stop code can start children.
-- A production-style Stop import regression replaces the selected runtime root
-  after validation and proves both Stop source and `codex_speak.helper` resolve
-  from the same validated runtime object, with no inherited descriptors visible
-  to Stop code.
-- Missing or fully invalid runtime state produces only the empty hook result.
+- Atomic/private/idempotent/concurrent launcher installation and failure cleanup.
+- Original-runtime preference and newer-sibling selection after original deletion.
+- Rejection of pre-existing symlink Marketplace identities, families, version
+  roots, manifests, and Stop files.
+- Rejection of wrong names, mismatched versions, malformed manifests, nested
+  paths, unsupported versions, and candidate-count overflow.
+- Exact empty-result behavior on missing runtime and `execv` failure.
+- Stable shell fallback when the launcher is absent.
+- Static installed launcher content, private-data canaries, environment
+  preservation, and bytecode-free installed/runtime trees.
+
+Tests intentionally do not simulate file replacement after validation; that is
+outside the selected threat model.
 
 ### Real-process upgrade regression
 
-Create a temporary Marketplace-like cache and stable plugin-data directory:
-
-1. Seed version A and run SessionStart installation.
-2. Capture the stable Stop command as an old task would.
-3. Delete version A and create version B.
+1. Seed version A and install the stable launcher.
+2. Capture the configured Stop command as an open task would.
+3. Delete version A and create valid version B.
 4. Invoke the captured command with `PLUGIN_ROOT` still pointing to version A.
-5. Assert version B's Stop hook receives stdin unchanged, retains an unrelated
-   environment canary, and produces the expected stdout, with no stderr and no
-   message content in argv, environment updates, or files.
-
-Also verify the shell fallback when no stable launcher exists.
+5. Assert version B receives stdin unchanged, retains an unrelated environment
+   canary, returns expected stdout with empty stderr, and persists no message
+   canary.
 
 ### Regression gates
 
-- Existing Python hook, privacy, queue, rendering, protocol, packaging, and
-  worker suites.
-- Swift menu-helper tests with warnings treated as errors.
-- Plugin validator, hook JSON validation, and bytecode-free compilation.
-- A packaged-cache smoke proving SessionStart creates the stable launcher and a
-  simulated subsequent upgrade still executes Stop.
-
-## Versioning and Release Boundary
-
-Prepare source version `0.2.6`. Update README migration and troubleshooting
-language to distinguish the one-time transition from forward-compatible future
-upgrades. Keep `.agents/plugins/marketplace.json` pinned to released `v0.2.5`
-until a separate explicit publish/install instruction.
+- Full Python suite outside the restricted execution sandbox when macOS boot
+  identity is required.
+- Swift menu-helper tests with warnings as errors.
+- Plugin validator, hook JSON validation, diff check, and source-tree bytecode
+  scan.
+- Source version remains `0.2.6`; Marketplace remains `v0.2.5` until explicit
+  publication authorization.
