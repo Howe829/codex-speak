@@ -176,6 +176,32 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("summaryItem.state = selectedMode == .summary", source)
         self.assertIn("fullItem.state = selectedMode == .full", source)
 
+    def test_menu_controller_localizes_every_menu_and_error_string(self) -> None:
+        source = (
+            ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("let itemTitles = localization.menuItemTitles", source)
+        for key in (
+            "errorBridgeStopped",
+            "errorClearFailed",
+            "errorModeWriteFailed",
+            "errorModeReadFailed",
+            "errorHeartbeatUnavailable",
+            "errorPlaybackRecordFailed",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(f"localization.string(.{key})", source)
+        for literal in (
+            "Speech bridge stopped",
+            "Could not clear pending speeches",
+            "Could not change speech mode",
+            "Could not read speech mode",
+            "Heartbeat unavailable",
+            "Could not record playback result",
+        ):
+            with self.subTest(literal=literal):
+                self.assertNotIn(f'showLocalError("{literal}")', source)
+
     def test_menu_refreshes_persisted_mode_when_opened(self) -> None:
         source = (
             ROOT / "menu-bar" / "Sources" / "CodexSpeakMenu" / "MenuController.swift"
@@ -195,7 +221,7 @@ class PackagingTests(unittest.TestCase):
             source,
             r"try await coordinator\.handle\(event: event\)\s*"
             r"\}\s*catch\s*\{\s*"
-            r'showLocalError\("Could not record playback result"\)\s*'
+            r"showLocalError\(localization\.string\(\.errorPlaybackRecordFailed\)\)\s*"
             r"\}\s*"
             r"selectedMode = await coordinator\.selectedMode\s*"
             r"updateCheckmarks\(\)",

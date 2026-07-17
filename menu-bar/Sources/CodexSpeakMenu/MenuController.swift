@@ -4,8 +4,6 @@ import Foundation
 
 @MainActor
 final class MenuController: NSObject, NSMenuDelegate {
-    static let itemTitles = codexSpeakMenuItemTitles
-
     private let application: NSApplication
     private let statusItem: NSStatusItem
     private let controlClient: any ControlClientProtocol
@@ -16,6 +14,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     private let heartbeat: Heartbeat
     private let configURL: URL
     private let pluginRoot: URL
+    private let localization: MenuLocalization
     private let silentItem: NSMenuItem
     private let summaryItem: NSMenuItem
     private let fullItem: NSMenuItem
@@ -33,9 +32,11 @@ final class MenuController: NSObject, NSMenuDelegate {
         pythonExecutableURL: URL,
         helperIdentity: String,
         helperToken: String,
-        configURL: URL
+        configURL: URL,
+        localization: MenuLocalization = MenuLocalization()
     ) throws {
         self.application = application
+        self.localization = localization
         let controlClient = ControlClient(
             pluginRoot: pluginRoot,
             dataDirectory: dataDirectory,
@@ -67,26 +68,27 @@ final class MenuController: NSObject, NSMenuDelegate {
         )
         self.configURL = configURL
         self.pluginRoot = pluginRoot
+        let itemTitles = localization.menuItemTitles
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        silentItem = NSMenuItem(title: Self.itemTitles[0], action: #selector(selectSilent), keyEquivalent: "")
-        summaryItem = NSMenuItem(title: Self.itemTitles[1], action: #selector(selectSummary), keyEquivalent: "")
-        fullItem = NSMenuItem(title: Self.itemTitles[2], action: #selector(selectFull), keyEquivalent: "")
+        silentItem = NSMenuItem(title: itemTitles[0], action: #selector(selectSilent), keyEquivalent: "")
+        summaryItem = NSMenuItem(title: itemTitles[1], action: #selector(selectSummary), keyEquivalent: "")
+        fullItem = NSMenuItem(title: itemTitles[2], action: #selector(selectFull), keyEquivalent: "")
         super.init()
 
         applyDefaultStatusIcon()
         let menu = NSMenu()
         let stopItem = NSMenuItem(
-            title: Self.itemTitles[3],
+            title: itemTitles[3],
             action: #selector(stopCurrentSpeech),
             keyEquivalent: ""
         )
         let clearItem = NSMenuItem(
-            title: Self.itemTitles[4],
+            title: itemTitles[4],
             action: #selector(clearPendingSpeeches),
             keyEquivalent: ""
         )
         let quitItem = NSMenuItem(
-            title: Self.itemTitles[5],
+            title: itemTitles[5],
             action: #selector(quit),
             keyEquivalent: ""
         )
@@ -129,7 +131,7 @@ final class MenuController: NSObject, NSMenuDelegate {
                     await self?.handle(message)
                 }
             } catch {
-                showLocalError("Speech bridge stopped")
+                showLocalError(localization.string(.errorBridgeStopped))
             }
             if !shuttingDown { await orderlyShutdown() }
         }
@@ -157,11 +159,11 @@ final class MenuController: NSObject, NSMenuDelegate {
             case .applied:
                 break
             case .appliedWithQueueClearFailure:
-                showLocalError("Could not clear pending speeches")
+                showLocalError(localization.string(.errorClearFailed))
             case .writeFailed:
-                showLocalError("Could not change speech mode")
+                showLocalError(localization.string(.errorModeWriteFailed))
             case .readFailed, .readFailedFailSafe:
-                showLocalError("Could not read speech mode")
+                showLocalError(localization.string(.errorModeReadFailed))
             }
         }
     }
@@ -178,10 +180,10 @@ final class MenuController: NSObject, NSMenuDelegate {
             selectedMode = await coordinator.selectedMode
             updateCheckmarks()
             if case .readyWithQueueClearFailure = result {
-                showLocalError("Could not clear pending speeches")
+                showLocalError(localization.string(.errorClearFailed))
             }
         } catch {
-            showLocalError("Could not read speech mode")
+            showLocalError(localization.string(.errorModeReadFailed))
         }
     }
 
@@ -200,7 +202,7 @@ final class MenuController: NSObject, NSMenuDelegate {
             _ = try controlClient.clearPending()
         } catch {
             try? diagnosticsClient.recordControlFailure(.queueClearFailed)
-            showLocalError("Could not clear pending speeches")
+            showLocalError(localization.string(.errorClearFailed))
         }
     }
 
@@ -216,7 +218,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         do {
             try heartbeat.write()
         } catch {
-            showLocalError("Heartbeat unavailable")
+            showLocalError(localization.string(.errorHeartbeatUnavailable))
             Task { await orderlyShutdown() }
         }
     }
@@ -232,7 +234,7 @@ final class MenuController: NSObject, NSMenuDelegate {
         do {
             try await coordinator.handle(event: event)
         } catch {
-            showLocalError("Could not record playback result")
+            showLocalError(localization.string(.errorPlaybackRecordFailed))
         }
         selectedMode = await coordinator.selectedMode
         updateCheckmarks()

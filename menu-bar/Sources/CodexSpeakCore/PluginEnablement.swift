@@ -6,15 +6,6 @@ public enum PluginEnablement: Equatable, Sendable {
     case unknown
 }
 
-public let codexSpeakMenuItemTitles = [
-    "Silent",
-    "Summary",
-    "Full",
-    "Stop Current Speech",
-    "Clear Pending Speeches",
-    "Quit Codex Speak",
-]
-
 public struct StrictMenuArguments: Equatable, Sendable {
     public let pluginRootPath: String
     public let dataDirectoryPath: String

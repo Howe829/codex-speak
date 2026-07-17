@@ -62,18 +62,4 @@ final class MenuConfigurationTests: XCTestCase {
             XCTAssertThrowsError(try StrictMenuArguments.parse(arguments), arguments.joined(separator: " "))
         }
     }
-
-    func testMenuHasExactSixItemsInOrder() {
-        XCTAssertEqual(
-            codexSpeakMenuItemTitles,
-            [
-                "Silent",
-                "Summary",
-                "Full",
-                "Stop Current Speech",
-                "Clear Pending Speeches",
-                "Quit Codex Speak",
-            ]
-        )
-    }
 }
