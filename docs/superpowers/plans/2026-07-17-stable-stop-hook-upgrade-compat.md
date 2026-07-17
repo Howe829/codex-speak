@@ -8,14 +8,18 @@
 
 > **Approved security amendment (2026-07-17 final review):** The human approved
 > descriptor safety over this plan's direct-path execution detail. The launcher
-> opens and enumerates the same-family directory through a validated
-> `O_DIRECTORY | O_NOFOLLOW` descriptor, opens the selected Stop regular file
-> relative to validated directory descriptors, and hands that exact inheritable
-> file descriptor to a fixed `python3 -B -c` bootstrap. The bootstrap consumes
-> and closes the descriptor before executing the source with the trusted path as
-> `__file__` and with direct-script import semantics. This amendment supersedes
-> the path revalidation and `python3 -B CURRENT_ROOT/hooks/stop.py` instructions
-> below; the historical TDD steps remain unchanged.
+> opens the Marketplace identity relative to its parent and the same-family
+> directory relative to that identity, all through validated
+> `O_DIRECTORY | O_NOFOLLOW` descriptors. It opens the selected Stop regular
+> file relative to validated directory descriptors and hands both the exact
+> Stop descriptor and validated runtime-root descriptor to a fixed
+> `python3 -B -c` bootstrap. The bootstrap snapshots bounded `codex_speak` and
+> `hooks` Python sources through the root descriptor, consumes and closes every
+> inherited descriptor, and then executes the Stop source with the trusted
+> logical path as `__file__`, direct-script semantics, and a fail-closed
+> in-memory plugin importer. This amendment supersedes the path revalidation and
+> `python3 -B CURRENT_ROOT/hooks/stop.py` instructions below; the historical TDD
+> steps remain unchanged.
 
 **Tech Stack:** Python 3.10+ standard library, Codex lifecycle hooks, POSIX shell command configuration, `unittest`, existing macOS Swift helper tests, Codex plugin validator.
 

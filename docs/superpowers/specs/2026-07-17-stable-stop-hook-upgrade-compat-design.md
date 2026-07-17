@@ -82,23 +82,30 @@ The launcher receives the task's original `PLUGIN_ROOT` and stable
 `PLUGIN_DATA` environment from Codex. It does not parse hook stdin. Once it has
 selected a valid current Stop hook, it sets `PLUGIN_ROOT` to that current root.
 It opens the selected Stop source with no-follow semantics through the already
-validated family, candidate, and hooks directory descriptors, marks only that
-validated regular-file descriptor inheritable, and uses `os.execv` to replace
-itself with a fixed standard-library bootstrap:
+validated family, candidate, and hooks directory descriptors. It retains the
+validated runtime-root descriptor alongside the validated Stop regular-file
+descriptor, marks only those two descriptors inheritable, and uses `os.execv`
+to replace itself with a fixed standard-library bootstrap:
 
 ```text
-python3 -B -c FIXED_BOOTSTRAP VALIDATED_STOP_FD TRUSTED_STOP_PATH
+python3 -B -c FIXED_BOOTSTRAP VALIDATED_ROOT_FD VALIDATED_STOP_FD TRUSTED_ROOT_PATH TRUSTED_STOP_PATH
 ```
 
-The bootstrap consumes and closes the descriptor, compiles that exact opened
-source with the trusted Stop path as `__file__`, restores direct-script
-`sys.argv` and import-path semantics, and then executes it as `__main__`.
-Consequently a rename or symlink replacement after validation cannot change the
-executed Stop source, and the descriptor cannot leak into later worker/helper
-children. Standard input, standard output, standard error, and every existing
-environment value remain attached; only `PLUGIN_ROOT` is intentionally updated.
-Speech content never appears in arguments, environment updates, launcher
-storage, hashes, diagnostics, or error output.
+The bootstrap consumes the exact Stop source and snapshots bounded Python
+sources for the `codex_speak` and `hooks` namespaces by opening them with
+no-follow semantics relative to the validated runtime-root descriptor. It then
+closes every inherited descriptor before normal Stop code can run or spawn a
+worker/helper. A fixed in-memory finder resolves plugin imports only from that
+validated snapshot and fails closed for missing plugin modules, so replacement
+of the logical version/root/hooks paths cannot redirect imports. The bootstrap
+compiles the opened Stop source with the trusted logical Stop path as
+`__file__`, restores direct-script `sys.argv` and import-path semantics, and
+executes it as `__main__`.
+
+Standard input, standard output, standard error, and every existing environment
+value remain attached; only `PLUGIN_ROOT` is intentionally updated. Speech
+content never appears in arguments, environment updates, launcher storage,
+hashes, diagnostics, or error output.
 
 ### Atomic launcher installation
 
@@ -147,10 +154,12 @@ The launcher follows this order:
 1. If the task's original real, non-symlink Stop hook still exists and its
    manifest is valid, execute it. This preserves exact-version behavior when
    Codex later begins retaining old caches.
-2. Open the original version directory's parent using
-   `O_DIRECTORY | O_NOFOLLOW`, validate the opened directory identity against
-   the family path, and enumerate only its direct children through that anchored
-   descriptor. A symlinked family or an identity change fails closed.
+2. Open the Marketplace identity directory with
+   `O_DIRECTORY | O_NOFOLLOW` relative to its already-open parent, validate its
+   identity, then open the `codex-speak` family relative to that Marketplace
+   descriptor with the same flags. A symlinked Marketplace identity/family or
+   an identity change fails closed. Enumerate only direct version children
+   through the anchored family descriptor.
 3. Ignore symlink roots, non-directories, unreadable entries, version names
    outside the supported numeric release/build format, manifests with a name
    other than `codex-speak`, manifest versions that differ from the directory
@@ -203,11 +212,18 @@ already captured by older tasks. Therefore:
 - It rejects symlink families/roots/hooks, family identity changes, wrong names,
   mismatched versions, malformed manifests, nested paths, and unsupported
   version strings.
+- A deterministic Marketplace-identity ancestor-symlink regression proves that
+  no runtime reached through another Marketplace identity is selected or
+  executed.
 - A deterministic cross-Marketplace family-symlink regression proves that no
   external runtime is selected or executed.
 - A deterministic post-validation replacement regression proves that the
   originally opened Stop source executes and that its inherited descriptor is
   closed before Stop code can start children.
+- A production-style Stop import regression replaces the selected runtime root
+  after validation and proves both Stop source and `codex_speak.helper` resolve
+  from the same validated runtime object, with no inherited descriptors visible
+  to Stop code.
 - Missing or fully invalid runtime state produces only the empty hook result.
 
 ### Real-process upgrade regression
