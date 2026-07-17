@@ -219,9 +219,12 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(marketplace["plugins"][0]["source"]["ref"], "v0.2.7")
         self.assertEqual(manifest["version"], "0.2.7")
 
-    def test_readme_displays_only_the_production_public_icon(self) -> None:
+    def test_readme_displays_only_the_approved_github_poster(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("![Codex Speak icon](assets/codex-speak-github.png)", readme)
+        poster = "![Codex Speak](assets/posters/codex-speak-github-16x9-v2.png)"
+
+        self.assertEqual(readme.count(poster), 1)
+        self.assertNotIn("![Codex Speak icon](assets/codex-speak-github.png)", readme)
         self.assertNotIn("artwork/concepts/", readme)
 
     def test_manifest_uses_public_logo_and_github_homepage(self) -> None:
