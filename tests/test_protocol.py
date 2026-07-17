@@ -132,6 +132,33 @@ class ProtocolTests(unittest.TestCase):
             extract_response(marker_v3("completed", overlong, "正文。"))
         )
 
+    def test_v3_rejects_json_escaped_angle_brackets_after_decoding(self) -> None:
+        escaped_messages = (
+            (
+                r'[codex-speak-v3]: <codex-speak:v3#{"status":"completed",'
+                r'"speech_lead":"任务：{{task_title}}已完成。",'
+                r'"speech_text":"正文\u003c。"}>'
+            ),
+            (
+                r'[codex-speak-v3]: <codex-speak:v3#{"status":"completed",'
+                r'"speech_lead":"任务：{{task_title}}已完成。",'
+                r'"speech_text":"正文\u003e。"}>'
+            ),
+            (
+                r'[codex-speak-v3]: <codex-speak:v3#{"status":"completed",'
+                r'"speech_lead":"任务：{{task_title}}\u003c已完成。",'
+                r'"speech_text":"正文。"}>'
+            ),
+            (
+                r'[codex-speak-v3]: <codex-speak:v3#{"status":"completed",'
+                r'"speech_lead":"任务：{{task_title}}\u003e已完成。",'
+                r'"speech_text":"正文。"}>'
+            ),
+        )
+        for message in escaped_messages:
+            with self.subTest(message=message):
+                self.assertIsNone(extract_response(message))
+
     def test_extracts_hidden_v2_marker_and_keeps_v1_transition(self) -> None:
         self.assertEqual(
             extract_response("正文\n\n" + marker_v2("completed", "完成。")),
@@ -151,6 +178,31 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(extract_response(v2 + " trailing"))
         self.assertIsNone(extract_response(marker_v2("completed", "包含>符号")))
         self.assertIsNone(extract_response(marker_v2("completed", "包含<符号")))
+
+    def test_v2_rejects_decoded_angle_brackets_but_v1_keeps_legacy_semantics(
+        self,
+    ) -> None:
+        for message in (
+            (
+                r'[codex-speak-v2]: <codex-speak:v2#{"status":"completed",'
+                r'"speech_text":"包含\u003c符号"}>'
+            ),
+            (
+                r'[codex-speak-v2]: <codex-speak:v2#{"status":"completed",'
+                r'"speech_text":"包含\u003e符号"}>'
+            ),
+        ):
+            with self.subTest(message=message):
+                self.assertIsNone(extract_response(message))
+
+        legacy = (
+            r'<!-- codex-speak:v1 {"status":"completed",'
+            r'"speech_text":"包含\u003c符号\u003e"} -->'
+        )
+        self.assertEqual(
+            extract_response(legacy),
+            ParsedResponse("completed", "包含<符号>", ""),
+        )
 
     def test_extracts_body_and_summary(self) -> None:
         parsed = extract_response("可见正文\n\n" + marker("completed", "任务完成。"))

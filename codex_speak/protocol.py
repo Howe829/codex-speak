@@ -119,6 +119,12 @@ def _parse_exact_payload(
         or not isinstance(raw_lead, str)
     ):
         return None
+    if version in {"v2", "v3"} and any(
+        character in value
+        for value in (raw_speech, raw_lead)
+        for character in "<>"
+    ):
+        return None
 
     speech_text = _sanitize_speech_text(raw_speech)
     if status == "silent":
