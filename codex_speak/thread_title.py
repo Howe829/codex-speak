@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import selectors
 import shutil
+import signal
 import subprocess
 import time
 from typing import Final, Mapping, Sequence
@@ -16,6 +17,7 @@ from .render import MAX_TASK_TITLE_CHARS, normalize_full_text
 DEFAULT_COMMAND: Final[tuple[str, ...]] = ("codex", "app-server", "--stdio")
 LOOKUP_TIMEOUT_SECONDS: Final[float] = 1.5
 MAX_OUTPUT_BYTES: Final[int] = 65_536
+MAX_SESSION_ID_BYTES: Final[int] = 1_048_576
 THREAD_READ_REQUEST_ID: Final[int] = 2
 
 
@@ -74,30 +76,24 @@ def _title_from_message(message: object, session_id: str) -> tuple[bool, str | N
     return True, title or None
 
 
-def _terminate(process: subprocess.Popen[bytes], *, deadline: float) -> None:
-    if process.poll() is not None:
-        process.wait()
-        return
-
-    try:
-        process.terminate()
-    except ProcessLookupError:
-        process.wait()
-        return
-    except OSError:
-        pass
-
-    remaining = max(0.0, deadline - time.monotonic())
-    try:
-        process.wait(timeout=min(0.2, remaining))
-        return
-    except subprocess.TimeoutExpired:
-        pass
-
-    try:
-        process.kill()
-    except ProcessLookupError:
-        pass
+def _terminate(
+    process: subprocess.Popen[bytes], *, process_group_id: int | None
+) -> None:
+    if process_group_id is not None:
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+    else:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
     process.wait()
 
 
@@ -116,9 +112,11 @@ def _resolved_command(command: Sequence[str] | None) -> tuple[str, ...] | None:
         executable = (
             shutil.which(selected[0]) if selected[0] == "codex" else selected[0]
         )
+        if not executable:
+            return None
+        if selected[0] == "codex":
+            executable = os.path.abspath(executable)
     except Exception:
-        return None
-    if not executable:
         return None
     return (executable, *selected[1:])
 
@@ -131,8 +129,7 @@ def resolve_thread_title(
     timeout_seconds: float = LOOKUP_TIMEOUT_SECONDS,
 ) -> str | None:
     if (
-        not isinstance(session_id, str)
-        or not session_id.strip()
+        type(session_id) is not str
         or isinstance(timeout_seconds, bool)
         or not isinstance(timeout_seconds, (int, float))
     ):
@@ -143,13 +140,23 @@ def resolve_thread_title(
         return None
     if not math.isfinite(timeout) or timeout <= 0:
         return None
-
+    timeout = min(timeout, LOOKUP_TIMEOUT_SECONDS)
     deadline = time.monotonic() + timeout
+
+    if not session_id.strip():
+        return None
+    try:
+        if len(session_id.encode("utf-8")) > MAX_SESSION_ID_BYTES:
+            return None
+        request = _request_bytes(session_id)
+    except (UnicodeError, ValueError):
+        return None
     selected = _resolved_command(command)
     if selected is None or time.monotonic() >= deadline:
         return None
 
     process: subprocess.Popen[bytes] | None = None
+    process_group_id: int | None = None
     selector: selectors.BaseSelector | None = None
     try:
         process = subprocess.Popen(
@@ -159,15 +166,19 @@ def resolve_thread_title(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=False,
+            start_new_session=os.name == "posix",
         )
+        if os.name == "posix":
+            process_group_id = process.pid
         assert process.stdin is not None
         assert process.stdout is not None
-        process.stdin.write(_request_bytes(session_id))
-        process.stdin.flush()
-        process.stdin.close()
+        os.set_blocking(process.stdin.fileno(), False)
 
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stdin, selectors.EVENT_WRITE)
+        request_view = memoryview(request)
+        request_offset = 0
         buffered = b""
         consumed = 0
 
@@ -176,22 +187,40 @@ def resolve_thread_title(
             ready = selector.select(remaining)
             if not ready:
                 break
-            chunk = os.read(process.stdout.fileno(), 4096)
-            if not chunk:
-                break
-            consumed += len(chunk)
-            if consumed > MAX_OUTPUT_BYTES:
-                return None
-            buffered += chunk
-            while b"\n" in buffered:
-                line, buffered = buffered.split(b"\n", 1)
-                try:
-                    message = json.loads(line)
-                except (ValueError, UnicodeError, RecursionError):
+            for key, mask in ready:
+                if key.fileobj is process.stdin and mask & selectors.EVENT_WRITE:
+                    try:
+                        written = os.write(
+                            process.stdin.fileno(), request_view[request_offset:]
+                        )
+                    except BlockingIOError:
+                        continue
+                    if written <= 0:
+                        return None
+                    request_offset += written
+                    if request_offset == len(request_view):
+                        selector.unregister(process.stdin)
+                        process.stdin.close()
                     continue
-                matched, title = _title_from_message(message, session_id)
-                if matched:
-                    return title
+
+                if key.fileobj is not process.stdout:
+                    continue
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    return None
+                consumed += len(chunk)
+                if consumed > MAX_OUTPUT_BYTES:
+                    return None
+                buffered += chunk
+                while b"\n" in buffered:
+                    line, buffered = buffered.split(b"\n", 1)
+                    try:
+                        message = json.loads(line)
+                    except (ValueError, UnicodeError, RecursionError):
+                        continue
+                    matched, title = _title_from_message(message, session_id)
+                    if matched:
+                        return title
         return None
     except Exception:
         return None
@@ -203,7 +232,7 @@ def resolve_thread_title(
                 pass
         if process is not None:
             try:
-                _terminate(process, deadline=deadline)
+                _terminate(process, process_group_id=process_group_id)
             except (OSError, subprocess.SubprocessError):
                 pass
             finally:

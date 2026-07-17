@@ -7,8 +7,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import warnings
 
+from codex_speak import thread_title
 from codex_speak.thread_title import resolve_thread_title
 
 
@@ -305,6 +307,132 @@ time.sleep(5)
             pid = int(pid_path.read_text(encoding="utf-8"))
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
+
+    def test_large_request_cannot_block_past_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pid_path = root / "pid"
+            command = self._server(
+                root,
+                f"""
+import os, pathlib, time
+pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))
+time.sleep(1)
+""".strip(),
+            )
+            started = time.monotonic()
+            self.assertIsNone(
+                resolve_thread_title(
+                    "x" * (512 * 1024),
+                    root,
+                    command=command,
+                    timeout_seconds=0.15,
+                )
+            )
+            self.assertLess(time.monotonic() - started, 0.4)
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process groups")
+    def test_reaps_descendant_after_server_leader_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            descendant_pid_path = root / "descendant-pid"
+            command = self._server(
+                root,
+                f"""
+import json, os, pathlib, subprocess, sys, time
+messages = [json.loads(sys.stdin.readline()) for _ in range(3)]
+thread_id = messages[2]["params"]["threadId"]
+descendant_code = (
+    "import os, pathlib, time;"
+    "pathlib.Path({str(descendant_pid_path)!r}).write_text(str(os.getpid()));"
+    "time.sleep(5)"
+)
+subprocess.Popen(
+    [sys.executable, "-c", descendant_code],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+limit = time.monotonic() + 1
+while not pathlib.Path({str(descendant_pid_path)!r}).exists():
+    if time.monotonic() >= limit:
+        raise RuntimeError("descendant did not start")
+    time.sleep(0.01)
+print(json.dumps({{"id": 2, "result": {{"thread": {{
+    "id": thread_id,
+    "name": "group cleaned"
+}}}}}}), flush=True)
+os._exit(0)
+""".strip(),
+            )
+            descendant_pid: int | None = None
+            try:
+                self.assertEqual(
+                    resolve_thread_title(
+                        "thread-10", root, command=command, timeout_seconds=1.0
+                    ),
+                    "group cleaned",
+                )
+                descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+                limit = time.monotonic() + 0.5
+                while time.monotonic() < limit:
+                    try:
+                        os.kill(descendant_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.01)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(descendant_pid, 0)
+            finally:
+                if descendant_pid is not None:
+                    try:
+                        os.kill(descendant_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_requested_timeout_is_capped_at_global_maximum(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command = self._server(
+                root,
+                """
+import sys, time
+[sys.stdin.readline() for _ in range(3)]
+time.sleep(5)
+""".strip(),
+            )
+            started = time.monotonic()
+            self.assertIsNone(
+                resolve_thread_title(
+                    "thread-11", root, command=command, timeout_seconds=1.7
+                )
+            )
+            self.assertLess(time.monotonic() - started, 1.65)
+
+    def test_hostile_session_id_string_subclass_never_raises(self) -> None:
+        class HostileString(str):
+            def strip(self, chars=None):
+                raise RuntimeError("must not escape")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(
+                resolve_thread_title(
+                    HostileString("thread-12"),
+                    Path(temporary),
+                    command=(),
+                    timeout_seconds=0.1,
+                )
+            )
+
+    def test_default_command_uses_absolute_discovered_executable(self) -> None:
+        with patch.object(thread_title.shutil, "which", return_value="relative/codex"):
+            command = thread_title._resolved_command(None)
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertTrue(Path(command[0]).is_absolute())
 
 
 if __name__ == "__main__":
