@@ -109,7 +109,7 @@ class PackagingTests(unittest.TestCase):
                     "source": {
                         "source": "url",
                         "url": "https://github.com/Howe829/codex-speak.git",
-                        "ref": "v0.2.3",
+                        "ref": "v0.2.4",
                     },
                     "policy": {
                         "installation": "AVAILABLE",
@@ -308,7 +308,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "codex-speak")
         self.assertRegex(
             manifest["version"],
-            r"^0\.2\.3(?:\+codex\.[a-z0-9-]+)?$",
+            r"^0\.2\.4(?:\+codex\.[a-z0-9-]+)?$",
         )
         self.assertEqual(manifest["interface"]["displayName"], "Codex Speak")
         self.assertEqual(
