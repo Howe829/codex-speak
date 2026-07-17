@@ -4,6 +4,7 @@ import unittest
 from codex_speak.protocol import ParsedResponse
 from codex_speak.render import (
     SpeechPayload,
+    compose_speech_lead,
     normalize_full_text,
     render_speech,
     segment_text,
@@ -22,6 +23,69 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(
             render_speech(silent, "full"),
             SpeechPayload("full", "silent", ("普通回答",)),
+        )
+
+    def test_summary_and_full_prefix_only_important_v3_responses(self) -> None:
+        done = ParsedResponse(
+            "completed",
+            "摘要正文。",
+            "完整正文。",
+            "豪哥，任务：{{task_title}}已完成。",
+        )
+        ordinary = ParsedResponse("silent", "", "普通回答。", "")
+
+        self.assertEqual(
+            render_speech(done, "summary", task_title="真实标题"),
+            SpeechPayload(
+                "summary",
+                "completed",
+                ("豪哥，任务：真实标题已完成。摘要正文。",),
+            ),
+        )
+        self.assertEqual(
+            render_speech(done, "full", task_title="真实标题"),
+            SpeechPayload(
+                "full",
+                "completed",
+                ("豪哥，任务：真实标题已完成。完整正文。",),
+            ),
+        )
+        self.assertEqual(
+            render_speech(ordinary, "full", task_title="不应出现"),
+            SpeechPayload("full", "silent", ("普通回答。",)),
+        )
+
+    def test_task_lead_uses_language_appropriate_generic_fallback(self) -> None:
+        self.assertEqual(
+            compose_speech_lead(
+                "豪哥，任务：{{task_title}}遇到阻塞。", None
+            ),
+            "豪哥，任务：当前任务遇到阻塞。",
+        )
+        self.assertEqual(
+            compose_speech_lead(
+                "Task {{task_title}} needs your attention. ", ""
+            ),
+            "Task current task needs your attention. ",
+        )
+
+    def test_task_title_is_normalized_and_capped_before_substitution(self) -> None:
+        unsafe = "**标题** https://example.com /Users/private/x " + "甲" * 100
+        lead = compose_speech_lead("任务：{{task_title}}已完成。", unsafe)
+        self.assertNotIn("https://", lead)
+        self.assertNotIn("/Users/private", lead)
+        title = lead.removeprefix("任务：").removesuffix("已完成。")
+        self.assertLessEqual(len(title), 80)
+
+    def test_legacy_responses_keep_existing_rendered_text(self) -> None:
+        legacy = ParsedResponse("completed", "旧摘要。", "旧全文。")
+        self.assertEqual(
+            render_speech(legacy, "summary", task_title="不应添加"),
+            SpeechPayload("summary", "completed", ("旧摘要。",)),
+        )
+        self.assertEqual(
+            render_speech(legacy, "full", task_title="不应添加"),
+            SpeechPayload("full", "completed", ("旧全文。",)),
         )
 
     def test_summarizes_non_prose(self) -> None:

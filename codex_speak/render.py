@@ -6,11 +6,12 @@ import re
 import unicodedata
 from typing import Final, Literal
 
-from .protocol import ParsedResponse
+from .protocol import ParsedResponse, TASK_TITLE_PLACEHOLDER
 
 
 SpeechMode = Literal["summary", "full"]
 MAX_SEGMENT_CHARS: Final[int] = 600
+MAX_TASK_TITLE_CHARS: Final[int] = 80
 
 _FENCE_OPEN_RE = re.compile(
     r"(?m)^[ \t]*(?P<fence>`{3,}|~{3,})[^\r\n]*(?:\r?\n|\Z)"
@@ -31,6 +32,7 @@ _MARKDOWN_LINE_PREFIX_RE = re.compile(
 )
 _EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
 _WHITESPACE_RE = re.compile(r"\s+")
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？.!?")
 _DOUBLE_QUOTE_TRANSLATION: Final[dict[int, None]] = str.maketrans(
     "", "", '\"“”„‟＂'
@@ -551,6 +553,17 @@ def normalize_full_text(value: str) -> str:
     return "".join(rendered).strip()
 
 
+def compose_speech_lead(template: str, task_title: str | None) -> str:
+    normalized_title = normalize_full_text(task_title or "")[
+        :MAX_TASK_TITLE_CHARS
+    ].strip()
+    if not normalized_title:
+        normalized_title = (
+            "当前任务" if _CJK_RE.search(template) else "current task"
+        )
+    return template.replace(TASK_TITLE_PLACEHOLDER, normalized_title)
+
+
 def _preferred_boundary(value: str, limit: int) -> int:
     paragraph = value.rfind("\n\n", 0, limit)
     if paragraph >= 0:
@@ -586,7 +599,10 @@ def segment_text(
 
 
 def render_speech(
-    response: ParsedResponse, mode: SpeechMode
+    response: ParsedResponse,
+    mode: SpeechMode,
+    *,
+    task_title: str | None = None,
 ) -> SpeechPayload | None:
     if mode == "summary":
         if response.status == "silent":
@@ -596,6 +612,11 @@ def render_speech(
         text = normalize_full_text(response.visible_body)
     else:
         raise ValueError(f"unsupported speech mode: {mode}")
+
+    if response.speech_lead_template:
+        text = compose_speech_lead(
+            response.speech_lead_template, task_title
+        ) + text
 
     segments = segment_text(text)
     if not segments:
