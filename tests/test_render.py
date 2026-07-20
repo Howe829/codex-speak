@@ -146,6 +146,32 @@ class RenderTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(normalize_full_text(body), expected)
 
+    def test_spells_standalone_app_to_avoid_say_truncating_the_sentence(self) -> None:
+        body = "前文 Codex app-server 后文继续播报。"
+
+        self.assertEqual(
+            normalize_full_text(body),
+            "前文 Codex A P P-server 后文继续播报。",
+        )
+
+    def test_spells_standalone_app_inside_short_inline_text(self) -> None:
+        self.assertEqual(
+            normalize_full_text("前文 `app-server` 后文继续播报。"),
+            "前文 A P P-server 后文继续播报。",
+        )
+
+    def test_spells_standalone_iphone_to_avoid_say_truncating_the_sentence(self) -> None:
+        body = (
+            "iPhone 监听：更符合现有 VibeKeys 遥控形态 "
+            "两端都支持：先 Mac，后续再扩展到 iPhone"
+        )
+
+        self.assertEqual(
+            normalize_full_text(body),
+            "I Phone 监听：更符合现有 VibeKeys 遥控形态 "
+            "两端都支持：先 Mac，后续再扩展到 I Phone",
+        )
+
     def test_preserves_ordered_list_labels_for_speech(self) -> None:
         cases = {
             "1. 第一项\n2. 第二项\n3. 第三项": (
@@ -527,6 +553,22 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(
             render_speech(response, "summary"),
             SpeechPayload("summary", "completed", ("第一句。第二句。",)),
+        )
+
+    def test_summary_mode_spells_standalone_app_before_playback(self) -> None:
+        response = ParsedResponse(
+            "completed",
+            "前文 Codex app-server 后文继续播报。",
+            "完整正文。",
+        )
+
+        self.assertEqual(
+            render_speech(response, "summary"),
+            SpeechPayload(
+                "summary",
+                "completed",
+                ("前文 Codex A P P-server 后文继续播报。",),
+            ),
         )
 
     def test_segment_boundaries_and_hard_split(self) -> None:

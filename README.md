@@ -40,8 +40,8 @@ SessionStart protocol and hook paths bind to the installed version.
 
 ## Release status and Stop-hook upgrades
 
-The current public Marketplace release is version 0.2.9.
-The source ref is `v0.2.9`.
+The current public Marketplace release is version 0.2.10.
+The source ref is `v0.2.10`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -164,9 +164,11 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-Version 0.2.9 is the current Marketplace release and preserves ordered-list
-labels while treating every non-empty single-backtick span up to 32 characters
-as spoken text after privacy cleaning. Version 0.2.8 preserved the public
+Version 0.2.10 prevents the system `say` voice from silently truncating a
+sentence at standalone `app` and `iPhone` tokens by spelling only those speech
+copies as `A P P` and `I Phone`. Version 0.2.9 preserved ordered-list labels
+while treating every non-empty single-backtick span up to 32 characters as
+spoken text after privacy cleaning. Version 0.2.8 preserved the public
 `/hooks` command label in Full mode while isolating sentences into bounded
 local `say` calls to prevent later speech from being lost when a voice engine
 finishes early. Version 0.2.7 added the production logo and GitHub homepage to

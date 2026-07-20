@@ -1,6 +1,6 @@
 {
   "name": "codex-speak",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Speaks concise Codex outcomes or complete responses on macOS.",
   "author": {"name": "Howard"},
   "homepage": "https://github.com/Howe829/codex-speak",

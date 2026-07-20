@@ -33,6 +33,14 @@ _MARKDOWN_LINE_PREFIX_RE = re.compile(
 )
 _EMPHASIS_RE = re.compile(r"(?:~~|[*_]+)")
 _WHITESPACE_RE = re.compile(r"\s+")
+_SAY_TRUNCATING_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:app|iphone)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_SAY_TOKEN_REPLACEMENTS: Final[dict[str, str]] = {
+    "app": "A P P",
+    "iphone": "I Phone",
+}
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？.!?")
 _UNCONDITIONAL_SENTENCE_ENDINGS: Final[frozenset[str]] = frozenset("。！？!?")
@@ -142,6 +150,13 @@ def _remove_unicode_controls(value: str) -> str:
     return "".join(_normalize_unicode_char(char) for char in value)
 
 
+def _normalize_say_compatibility(value: str) -> str:
+    return _SAY_TRUNCATING_TOKEN_RE.sub(
+        lambda match: _SAY_TOKEN_REPLACEMENTS[match.group(0).lower()],
+        value,
+    )
+
+
 def _fenced_code_ranges(value: str) -> tuple[tuple[int, int], ...]:
     ranges: list[tuple[int, int]] = []
     cursor = 0
@@ -205,6 +220,7 @@ def _inline_label(match: re.Match[str]) -> str | None:
     text = _replace_plain_markdown_containers(text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
+    text = _normalize_say_compatibility(text)
     return text.strip() or None
 
 
@@ -511,6 +527,7 @@ def _normalize_ordinary_text(
     text = _replace_plain_markdown_containers(text)
     text = _URL_RE.sub("链接", text)
     text = _PATH_RE.sub("相关文件", text)
+    text = _normalize_say_compatibility(text)
     text = _remove_at_source_line_starts(
         _TABLE_SEPARATOR_RE, text, starts_at_line_start
     )
@@ -661,6 +678,7 @@ def render_speech(
         text = compose_speech_lead(
             response.speech_lead_template, task_title
         ) + text
+    text = _normalize_say_compatibility(text)
 
     segments = (
         segment_full_text(text)
