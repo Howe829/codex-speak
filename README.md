@@ -2,10 +2,11 @@
 
 ![Codex Speak](assets/posters/codex-speak-github-16x9-v2.png)
 
-Codex Speak is a local macOS Codex Plugin that speaks turn outcomes with the
-system `say` command. It can announce concise outcome summaries or read the
-complete visible response, while a private menu bar helper provides playback
-controls without adding commands to the conversation.
+Codex Speak is a local macOS Codex Plugin that speaks turn outcomes and
+permission-request alerts with the system `say` command. It can announce
+concise outcome summaries or read the complete visible response, while a
+private menu bar helper provides playback controls without adding commands to
+the conversation.
 
 ## Requirements
 
@@ -33,15 +34,18 @@ and install it. The equivalent CLI command is:
 codex plugin add codex-speak@howe829
 ```
 
-Open `/hooks` after installation, review the bundled `SessionStart` and `Stop`
-commands, and trust the current definitions. Codex asks again when a hook
-definition changes. Start a new task after installation or reinstall so the
-SessionStart protocol and hook paths bind to the installed version.
+Open `/hooks` after installation, review the bundled `SessionStart`,
+`PermissionRequest`, and `Stop` commands, and trust the current definitions.
+Codex asks again when a hook definition changes. Start a new task after
+installation or reinstall so the SessionStart protocol and hook paths bind to
+the installed version.
 
 ## Release status and Stop-hook upgrades
 
 The current public Marketplace release is version 0.2.10.
 The source ref is `v0.2.10`.
+The current unreleased branch adds permission-request alerts; they are not part
+of the public release until a later, separately authorized release.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -87,6 +91,12 @@ The menu bar checkmark selects one speech mode:
   Full speech runs one sentence per local `say` process, with oversized
   sentences split again at 180 characters, so a voice-engine early completion
   cannot discard every later sentence in the response.
+
+When Codex creates a `PermissionRequest`, Summary and Full both speak the fixed
+neutral alert `Codex 有操作需要审批。`; Silent suppresses it. The alert does not
+mean that a person definitely saw an approval dialog: an enabled Auto-review
+reviewer may subsequently handle the request. Codex Speak never allows or
+denies the request and leaves the normal approval flow unchanged.
 
 Important completed, blocked, and action-required announcements begin with the
 real Codex task title. The lead follows the conversation language and known
@@ -143,6 +153,9 @@ helper-state contains only its schema version, starting/running phase, PID,
 boot identity, monotonic heartbeat, a fixed-length SHA-256 identity of the
 canonical plugin root, and a random fixed-length handshake token. It never
 stores the raw plugin path, plugin version, or speech content.
+Permission-request commands, tool arguments, paths, and approval descriptions
+are never spoken or persisted; only the fixed neutral alert enters the private
+speech queue.
 No component performs network access. Automated privacy canaries cover prompt,
 body, summary, code, URL, path, segmented speech, success, failure, and cancel
 paths; fake runners ensure tests never produce sound.
@@ -244,8 +257,11 @@ continue in the new one; tasks bind lifecycle hook paths when they start.
 - Marketplace registration fails: verify GitHub access to the public
   `Howe829/codex-speak` repository, run `codex plugin marketplace list` to
   inspect registered marketplaces, then retry the registration command.
-- No speech: confirm `Plugin Toggle` is enabled, then review and trust both
+- No speech: confirm `Plugin Toggle` is enabled, then review and trust all three
   bundled hooks in `/hooks`.
+- No approval alert: confirm the `PermissionRequest` hook is trusted and the
+  speech mode is Summary or Full. Auto-review may resolve the request after the
+  alert without showing a manual approval dialog.
 - No speech in an existing thread: start a new thread so SessionStart injects
   the protocol.
 - A generic `current task` lead means the bounded local title lookup failed or

@@ -11,6 +11,18 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/permission_request.py\"",
+            "statusMessage": "Preparing approval alert"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

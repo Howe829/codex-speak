@@ -712,16 +712,27 @@ class HookTests(unittest.TestCase):
             self.assertEqual(main(), 0)
         self.assertEqual(json.loads(stdout.getvalue()), {})
 
-    def test_hook_config_registers_default_session_start_and_stop_commands(self) -> None:
+    def test_hook_config_registers_session_permission_and_stop_commands(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        self.assertEqual(set(config["hooks"]), {"SessionStart", "Stop"})
+        self.assertEqual(
+            set(config["hooks"]),
+            {"SessionStart", "PermissionRequest", "Stop"},
+        )
         session_command = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        permission_group = config["hooks"]["PermissionRequest"][0]
+        permission_command = permission_group["hooks"][0]["command"]
         stop_command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertEqual(
             session_command,
             'python3 -B "${PLUGIN_ROOT}/hooks/session_start.py"',
         )
+        self.assertEqual(permission_group["matcher"], "*")
+        self.assertEqual(
+            permission_command,
+            'python3 -B "${PLUGIN_ROOT}/hooks/permission_request.py"',
+        )
+        self.assertNotIn("PLUGIN_DATA", permission_command)
         expected_stop = (
             'if [ -f "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py" ]; then '
             'python3 -B "${PLUGIN_DATA}/runtime-hooks/stop_launcher.py"; '
