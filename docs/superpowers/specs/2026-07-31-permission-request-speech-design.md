@@ -35,7 +35,7 @@ Rejected. Direct playback would bypass the queue, mode settings, helper lifecycl
 
 `hooks/hooks.json` will register a `PermissionRequest` command handler with a wildcard matcher. The handler will live at `hooks/permission_request.py` and will use `PLUGIN_ROOT` and `PLUGIN_DATA` in the same way as the existing hooks.
 
-The command exits successfully without returning an approval decision. Codex therefore continues its normal approval flow.
+The command exits successfully with empty standard output. It returns no approval decision, so Codex continues its normal approval flow.
 
 ### Handler responsibilities
 
@@ -47,7 +47,7 @@ The handler will:
 4. Construct one fixed `action_required` speech payload for Summary or Full mode.
 5. Enqueue the alert under a permission-specific identity.
 6. Start the existing consumer on a best-effort basis.
-7. Exit successfully without `allow`, `deny`, `updatedInput`, or other permission-control output.
+7. Exit successfully with empty standard output and without `allow`, `deny`, `updatedInput`, or other permission-control output.
 
 The handler will not import Stop-marker parsing or task-title resolution because approval alerts have fixed content and are not task-result announcements.
 
@@ -72,13 +72,13 @@ The existing queue settle delay, expiry, per-session ordering, menu actions, hel
 
 The implementation treats all `PermissionRequest` tool data as sensitive. It validates only what it needs for event identity and never writes or speaks request content. Diagnostics remain metadata-only.
 
-The handler is fail-open with respect to the approval UI: malformed input, unavailable settings, queue errors, or helper startup failures may suppress the speech alert, but they must not approve, deny, delay, or block the underlying request. The handler catches internal failures and exits successfully with no decision.
+The handler is fail-open with respect to the approval UI: malformed input, settings-loader failure, queue errors, or helper startup failures may suppress the speech alert, but they must not approve, deny, delay, or block the underlying request. The handler catches internal failures and exits successfully with no decision.
 
 ## Error Handling
 
 - Unsupported platform: discard the speech alert and record metadata when possible.
 - Invalid or missing hook identity: discard the alert without exposing input data.
-- Invalid settings: discard the alert and preserve the existing settings diagnostic behavior.
+- Invalid persisted settings: preserve the existing `load_mode` diagnostic and Summary fallback. If the settings loader itself raises, discard the alert.
 - Queue failure: discard any partial event and record a bounded error code.
 - Consumer startup failure: preserve an event only when another consumer owns the worker lock; otherwise remove it and record failure.
 - Any unexpected exception at the command boundary: emit no permission decision and exit successfully.
@@ -93,15 +93,15 @@ Implementation will follow red-green-refactor. Tests will cover:
 - the permission-specific event identity does not collide with the turn's Stop identity;
 - repeated equivalent approval input deduplicates;
 - tool input and approval description never appear in queued speech or diagnostics;
-- malformed input, unsupported platforms, invalid settings, queue errors, and helper startup errors do not emit approval decisions;
-- the command entry point exits zero and returns no `allow` or `deny` behavior;
+- malformed input, unsupported platforms, settings-loader errors, queue errors, and helper startup errors do not emit approval decisions;
+- the command entry point exits zero with empty standard output and returns no `allow` or `deny` behavior;
 - packaging and privacy tests include the new hook file and command.
 
 ## Acceptance Conditions
 
 The feature is ready for release only when all of the following are demonstrated:
 
-1. A real approval-requiring Codex action triggers the fixed speech alert in Summary and Full modes.
+1. After the updated hook definition is reviewed and trusted, a real approval-requiring Codex action triggers the fixed speech alert in Summary and Full modes.
 2. The normal approval interface still appears and retains control of the decision.
 3. Silent mode produces no approval speech.
 4. Approval speech and the later task-result speech can both be delivered for the same turn.
