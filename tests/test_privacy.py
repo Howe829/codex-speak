@@ -6,10 +6,11 @@ import tempfile
 import time
 import unittest
 
+from hooks.permission_request import handle_event as handle_permission_request
 from hooks.stop import handle_event
 from codex_speak.hook_runtime import install_stop_launcher
 from codex_speak.bridge import run_bridge
-from codex_speak.queue import enqueue
+from codex_speak.queue import enqueue, poll_next
 from codex_speak.render import (
     SpeechPayload,
     normalize_full_text,
@@ -23,6 +24,37 @@ def summary_payload(status: str, text: str) -> SpeechPayload:
 
 
 class PrivacyAndPackagingTests(unittest.TestCase):
+    def test_permission_request_content_never_enters_runtime_files(self) -> None:
+        secret = "PRIVATE_APPROVAL_COMMAND_73191"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_dir = root / "data"
+            self.assertTrue(
+                handle_permission_request(
+                    {
+                        "session_id": "session",
+                        "turn_id": "turn",
+                        "tool_name": "Bash",
+                        "tool_input": {
+                            "command": secret,
+                            "description": f"approve {secret}",
+                        },
+                    },
+                    plugin_root=root,
+                    data_dir=data_dir,
+                    platform_name="darwin",
+                    mode_loader=lambda _: "summary",
+                    start_consumer=lambda *_: None,
+                )
+            )
+            event = poll_next(data_dir, now=time.monotonic() + 2.0).event
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertEqual(event.segments, ("Codex 有操作需要审批。",))
+            for path in data_dir.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(secret.encode("utf-8"), path.read_bytes(), path)
+
     def test_installed_stable_launcher_is_static_and_stop_command_is_fixed(self) -> None:
         root = Path(__file__).resolve().parents[1]
         canaries = (
