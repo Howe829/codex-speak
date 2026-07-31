@@ -42,10 +42,8 @@ the installed version.
 
 ## Release status and Stop-hook upgrades
 
-The current public Marketplace release is version 0.2.10.
-The source ref is `v0.2.10`.
-The current unreleased branch adds permission-request alerts; they are not part
-of the public release until a later, separately authorized release.
+The current public Marketplace release is version 0.2.11.
+The source ref is `v0.2.11`.
 
 On SessionStart, the plugin installs a private fixed launcher at
 `runtime-hooks/stop_launcher.py` under plugin data, and Stop prefers that
@@ -177,7 +175,9 @@ directory.
 New tasks use an unused CommonMark reference definition for private speech
 control metadata, so the marker is not shown in rendered responses.
 
-Version 0.2.10 prevents the system `say` voice from silently truncating a
+Version 0.2.11 adds a fixed neutral alert for Codex permission requests in
+Summary and Full modes without speaking or persisting request details. Version
+0.2.10 prevents the system `say` voice from silently truncating a
 sentence at standalone `app` and `iPhone` tokens by spelling only those speech
 copies as `A P P` and `I Phone`. Version 0.2.9 preserved ordered-list labels
 while treating every non-empty single-backtick span up to 32 characters as
